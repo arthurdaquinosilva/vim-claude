@@ -5,8 +5,10 @@ vim9script
 import autoload 'claude/util.vim'
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-const HDR_USER = '▌ You'
-const HDR_CLAUDE = '▌ Claude'
+const HDR_USER = '❯ You'
+const HDR_CLAUDE = '✻ Claude'
+const HDR_PAT = '^\%(❯ You\|✻ Claude\)$'
+const LIVE_LABELS = {thinking: 'thinking…', responding: 'writing…'}
 const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const MODE_LABELS = {default: 'ask before edits', acceptEdits: 'auto-accept edits',
   plan: 'plan mode', bypassPermissions: 'bypass permissions'}
@@ -35,7 +37,8 @@ var text_open = false
 var streamed = false        # current assistant message arrived via deltas
 var touched_files = false
 var text_start = 0          # first line of the text block being streamed
-var turn_header = false     # "▌ Claude" already printed for this turn
+var turn_header = false     # "✻ Claude" already printed for this turn
+var live_lnum = 0           # line of the "✻ Claude" header showing the spinner
 
 var history: list<string> = []
 var hist_idx = -1
@@ -87,14 +90,17 @@ def SetupChatBuf()
   silent! file claude://chat
   chat_buf = bufnr()
   prop_type_add('claude_code', {bufnr: chat_buf, highlight: 'claudeTableCode'})
+  prop_type_add('claude_time', {bufnr: chat_buf, highlight: 'ClaudeTime'})
+  prop_type_add('claude_live', {bufnr: chat_buf, highlight: 'ClaudeLive'})
+  prop_type_add('claude_user', {bufnr: chat_buf, highlight: 'ClaudeUserText'})
 
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   for key in ['i', 'a', 'I', 'A', 'o', 'O', '<CR>']
     execute 'nnoremap <buffer><silent> ' .. key .. ' <ScriptCmd>FocusInput(true)<CR>'
   endfor
-  nnoremap <buffer><silent> ]] <ScriptCmd>search('^▌ ', 'W')<CR>
-  nnoremap <buffer><silent> [[ <ScriptCmd>search('^▌ ', 'bW')<CR>
+  nnoremap <buffer><silent> ]] <ScriptCmd>search(HDR_PAT, 'W')<CR>
+  nnoremap <buffer><silent> [[ <ScriptCmd>search(HDR_PAT, 'bW')<CR>
   nnoremap <buffer><silent> gy <ScriptCmd>YankCodeBlock()<CR>
 
   augroup claude_chat
@@ -107,7 +113,7 @@ def SetupChatWin()
   setlocal wrap linebreak breakindent nonumber norelativenumber nolist nospell
   setlocal signcolumn=no foldcolumn=0 colorcolumn= winfixwidth conceallevel=2
   setlocal foldmethod=expr foldlevel=99
-  &l:foldexpr = "getline(v:lnum) =~# '^▌ ' ? '>1' : '1'"
+  &l:foldexpr = "getline(v:lnum) =~# '" .. HDR_PAT .. "' ? '>1' : '1'"
   &l:statusline = '%!claude#StatusLine()'
 enddef
 
@@ -180,6 +186,15 @@ def DefineHighlights()
     get(inbg, 'ctermbg', 'NONE'), get(inbg, 'guibg', 'NONE'))
   sign_define('ClaudePrompt', {text: '❯', texthl: 'ClaudePromptSign'})
   sign_define('ClaudeCont', {text: ' ', texthl: 'ClaudeInputSign'})
+  # Speakers: you in the prompt color, Claude in Claude's orange.
+  highlight default ClaudeAssistant ctermfg=173 guifg=#d97757 cterm=bold gui=bold
+  highlight default ClaudeLive ctermfg=173 guifg=#d97757
+  highlight default link ClaudeTime Comment
+  highlight default link ClaudeUserText Comment
+  var spc = hlget('Special', true)
+  var sp0 = empty(spc) ? {} : spc[0]
+  execute printf('highlight default ClaudeYou ctermfg=%s guifg=%s cterm=bold gui=bold',
+    get(sp0, 'ctermfg', 'NONE'), get(sp0, 'guifg', 'NONE'))
   highlight default link ClaudeRule Comment
   LinkCodeHighlight()
   highlight default link ClaudeTitle Title
@@ -446,20 +461,49 @@ def EnsureChatBuf()
   win_gotoid(from)
 enddef
 
-def Header(name: string)
+def LineCount(): number
+  return getbufinfo(chat_buf)[0].linecount
+enddef
+
+# Speaker line ("❯ You" / "✻ Claude") with the time right-aligned.
+def Header(name: string, time: string)
   CloseText()
   if bufexists(chat_buf) && !BufEmpty()
     EnsureBlank()
   endif
   Append([name])
+  if time != ''
+    prop_add(LineCount(), 0, {bufnr: chat_buf, type: 'claude_time', text: time, text_align: 'right'})
+  endif
   last_kind = 'header'
 enddef
 
-def RenderUser(text: string)
-  Header(HDR_USER)
+def RenderUser(text: string, time: string = strftime('%H:%M'))
+  Header(HDR_USER, time)
   turn_header = false
-  Append(split(text, "\n", 1))
+  var first = LineCount() + 1
+  var lines = split(text, "\n", 1)
+  Append(lines)
+  # Your own message is dimmed, so Claude's replies stand out.
+  for i in range(len(lines))
+    if lines[i] != ''
+      prop_add(first + i, 1, {bufnr: chat_buf, type: 'claude_user', length: strlen(lines[i])})
+    endif
+  endfor
   last_kind = 'user'
+enddef
+
+# "✻ Claude ⠋ writing…" on the header while the reply is in progress.
+def UpdateLive()
+  if !bufexists(chat_buf)
+    return
+  endif
+  prop_remove({bufnr: chat_buf, type: 'claude_live', all: true})
+  if busy && live_lnum > 0 && live_lnum <= LineCount() && getbufline(chat_buf, live_lnum)[0] == HDR_CLAUDE
+    var label = get(LIVE_LABELS, status_text, status_text .. '…')
+    prop_add(live_lnum, 0, {bufnr: chat_buf, type: 'claude_live', text_align: 'after',
+      text: '  ' .. SPIN[spin_i % len(SPIN)] .. ' ' .. label})
+  endif
 enddef
 
 def Info(line: string)
@@ -536,10 +580,12 @@ def AppendText(s: string)
   endif
 enddef
 
-def EnsureClaudeHeader()
+def EnsureClaudeHeader(time: string = strftime('%H:%M'))
   if !turn_header
-    Header(HDR_CLAUDE)
+    Header(HDR_CLAUDE, time)
     turn_header = true
+    live_lnum = LineCount()
+    UpdateLive()
   endif
 enddef
 
@@ -572,12 +618,14 @@ def SetBusy(on: bool, what: string = 'thinking')
     turn_start = reltime()
     spin_timer = timer_start(100, (_) => {
       spin_i += 1
+      UpdateLive()
       redrawstatus!
     }, {repeat: -1})
   elseif !on && spin_timer != 0
     timer_stop(spin_timer)
     spin_timer = 0
   endif
+  UpdateLive()
   RefreshInput()
   redrawstatus!
 enddef
@@ -708,6 +756,8 @@ def SendRaw(payload: string): bool
   streamed = false
   turn_header = false
   SetBusy(true, 'thinking')
+  # Show "✻ Claude ⠋ thinking…" right away, before the first token.
+  EnsureClaudeHeader()
   return true
 enddef
 
@@ -763,6 +813,7 @@ def OnStreamEvent(e: dict<any>)
       status_text = 'responding'
       EnsureClaudeHeader()
     endif
+    UpdateLive()
   elseif et == 'content_block_delta'
     var d = get(e, 'delta', {})
     if get(d, 'type', '') == 'text_delta'
@@ -811,6 +862,7 @@ def OnToolResults(ev: dict<any>)
     endif
   endfor
   status_text = 'thinking'
+  UpdateLive()
 enddef
 
 def OnResult(ev: dict<any>)
@@ -1099,13 +1151,13 @@ def LoadSession(file: string)
   Open(false)
   for e in util.ParseTranscript(readfile(file))
     if e.role == 'user'
-      RenderUser(e.text)
+      RenderUser(e.text, '')
     elseif e.kind == 'tool'
-      EnsureClaudeHeader()
+      EnsureClaudeHeader('')
       Info('● ' .. e.text)
       last_kind = 'tool'
     else
-      EnsureClaudeHeader()
+      EnsureClaudeHeader('')
       AppendText(e.text)
       CloseText()
     endif

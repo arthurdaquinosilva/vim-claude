@@ -9,8 +9,8 @@ unlet! b:current_syntax
 # Stray `_`/`*` in prose are common in replies; don't paint them as errors.
 silent! syntax clear markdownError
 
-syntax match claudeUser   /^▌ You$/
-syntax match claudeClaude /^▌ Claude$/
+syntax match claudeUser   /^❯ You$/
+syntax match claudeClaude /^✻ Claude$/
 syntax match claudeTool   /^  ● .*$/
 syntax match claudeToolErr /^    ⎿ .*$/
 syntax match claudeAttach /^  ↳ .*$/
@@ -23,8 +23,8 @@ syntax match claudeTableRow /^[┌├└│].*[┐┤┘│]$/ contains=claudeTa
 syntax match claudeTableBorder /[┌┬┐├┼┤└┴┘─│]/ contained
 # Inline code in tables is highlighted with text properties (claudeTableCode).
 
-highlight default link claudeUser    Statement
-highlight default link claudeClaude  Special
+highlight default link claudeUser    ClaudeYou
+highlight default link claudeClaude  ClaudeAssistant
 highlight default link claudeTool    Comment
 highlight default link claudeToolErr WarningMsg
 highlight default link claudeAttach  Directory
