@@ -103,7 +103,7 @@ enddef
 
 def SetupChatWin()
   setlocal wrap linebreak breakindent nonumber norelativenumber nolist nospell
-  setlocal signcolumn=no foldcolumn=0 winfixwidth conceallevel=2
+  setlocal signcolumn=no foldcolumn=0 colorcolumn= winfixwidth conceallevel=2
   setlocal foldmethod=expr foldlevel=99
   &l:foldexpr = "getline(v:lnum) =~# '^▌ ' ? '>1' : '1'"
   &l:statusline = '%!claude#StatusLine()'

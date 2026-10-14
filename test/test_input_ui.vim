@@ -69,3 +69,11 @@ def g:Test_busy_placeholder_and_bars()
   g:statusline_winid = input_win
   assert_match('enter send', Plain(claude.InputStatusLine()))
 enddef
+
+def g:Test_panel_windows_have_no_colorcolumn()
+  set colorcolumn=60,80
+  claude.Open()
+  assert_equal('', getwinvar(win_findbuf(claude.Debug().chat_buf)[0], '&colorcolumn'))
+  assert_equal('', &l:colorcolumn)
+  set colorcolumn&
+enddef
