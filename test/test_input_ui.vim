@@ -77,3 +77,17 @@ def g:Test_panel_windows_have_no_colorcolumn()
   assert_equal('', &l:colorcolumn)
   set colorcolumn&
 enddef
+
+def g:Test_quitting_chat_window_keeps_editor_height()
+  claude.NewChat()
+  silent! only!
+  var full = winheight(0)
+  var editor = win_getid()
+  claude.Open()
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  quit
+  doautocmd WinResized
+  g:WaitFor('winnr("$") == 1')
+  assert_equal(editor, win_getid())
+  assert_equal(full, winheight(0))
+enddef

@@ -209,7 +209,9 @@ def RefreshInput()
     prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
   endif
   var lines = getbufline(input_buf, 1, '$')
-  for w in filter(InputWins(), (_, id) => win_id2tabwin(id)[0] == tabpagenr())
+  # Only resize an input box stacked right under the chat: in any other
+  # layout (e.g. the chat was just :q'd) resizing would squash its neighbours.
+  for w in filter(InputWins(), (_, id) => UnderChat(id))
     var rows = util.DisplayRows(lines, winwidth(w) - 2, 0)
     var h = min([max([rows, Opt('input_height', 3)]), Opt('input_max_height', 12)])
     if winheight(w) != h
@@ -220,6 +222,21 @@ def RefreshInput()
       win_execute(w, 'winrestview({topline: 1})')
     endif
   endfor
+enddef
+
+def UnderChat(input_win: number): bool
+  var i = getwininfo(input_win)
+  if empty(i) || i[0].tabnr != tabpagenr()
+    return false
+  endif
+  for c in ChatWins()
+    var ci = getwininfo(c)[0]
+    if ci.tabnr == i[0].tabnr && ci.wincol == i[0].wincol && ci.width == i[0].width
+        && ci.winrow + ci.height + 1 == i[0].winrow
+      return true
+    endif
+  endfor
+  return false
 enddef
 
 export def InputStatusLine(): string
