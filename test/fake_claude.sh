@@ -37,6 +37,16 @@ while IFS= read -r line; do
     echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
     continue
   fi
+  if [[ "$line" == *CODE* ]]; then
+    se '{"type":"message_start"}'
+    se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
+    for chunk in 'Look:\n```j' 's\nconst x = 1;\nfunction f() { return x; }\n```\n\n```py\ndef g():\n    return None\n```\n' '```nosuchlang\nzzz\n```'; do
+      se "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"$chunk\"}}"
+    done
+    se '{"type":"content_block_stop","index":0}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    continue
+  fi
   if [[ "$line" == *DRIP* ]]; then
     se '{"type":"message_start"}'
     se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'

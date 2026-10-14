@@ -219,7 +219,7 @@ def g:Test_table_rows_are_not_concealed()
     concealed += synconcealed(lnum, col)[0]
   endfor
   assert_equal(0, concealed)
-  assert_equal(['claudeTableRow'], synstack(lnum, 6)->map((_, id) => synIDattr(id, 'name')))
+  assert_equal(['claudeMsgClaude', 'claudeTableRow'], synstack(lnum, 6)->map((_, id) => synIDattr(id, 'name')))
   # Inline code keeps its color through a text property instead.
   var p = prop_list(lnum)
   assert_equal(1, len(p))
@@ -264,4 +264,33 @@ def g:Test_claude_header_appears_before_first_token()
   var live = filter(prop_list(len(lines) - 1, {bufnr: claude.Debug().chat_buf}), (_, p) => p.type == 'claude_live')
   assert_match('thinking…$', live[0].text)
   claude.Stop()
+enddef
+
+def g:Test_code_fences_get_language_syntax()
+  Reset()
+  claude.Open()
+  claude.Send('CODE please')
+  g:WaitFor('!claude#Busy()')
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  var Names = (text: string, col: number): string =>
+    join(synstack(index(ChatLines(), text) + 1, col)->map((_, id) => synIDattr(id, 'name')), ' ')
+  assert_match('claudeFence\d\+ .*javaScript', Names('  function f() { return x; }', 3))
+  assert_match('claudeFence\d\+ .*python', Names('  def g():', 3))
+  # Unknown languages fall back to Markdown's plain code block.
+  assert_notmatch('claudeFence', Names('  zzz', 3))
+  # Survives a syntax reload.
+  setlocal syntax=claudechat
+  assert_match('javaScript', Names('  function f() { return x; }', 3))
+enddef
+
+def g:Test_unbalanced_backticks_do_not_spill_into_next_message()
+  Reset()
+  claude.Open()
+  claude.Send("show a ```js fenced snippet, then a ```python one")
+  g:WaitFor('!claude#Busy()')
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  var lnum = index(ChatLines(), '✻ Claude:') + 1
+  assert_equal('claudeClaude', synIDattr(synID(lnum, 1, 1), 'name'))
+  var done = index(ChatLines(), '  Done.') + 1
+  assert_notmatch('Code', join(synstack(done, 3)->map((_, id) => synIDattr(id, 'name'))))
 enddef

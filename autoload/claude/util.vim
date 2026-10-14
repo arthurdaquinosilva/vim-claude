@@ -333,6 +333,29 @@ export def Rule(lefts: list<list<list<string>>>, right: list<list<string>>, widt
   return '%#' .. rule_hl .. '#' .. repeat('─', max([width, 0]))
 enddef
 
+# Plain statusline exactly `width` cells wide: "  <left>     <right> ".
+# The left side is dropped first when space runs out, then the right side
+# is cut short.
+export def Bar(left: list<list<string>>, right: list<list<string>>, width: number, hl: string): string
+  var Len = (segs: list<list<string>>): number =>
+    reduce(segs, (acc, s) => acc + strwidth(s[0]), 0)
+  var Draw = (segs: list<list<string>>): string =>
+    join(mapnew(segs, (_, s) => '%#' .. (s[1] == '' ? hl : s[1]) .. '#'
+      .. substitute(s[0], '%', '%%', 'g')), '')
+  var l = left
+  if 2 + Len(l) + 2 + Len(right) + 1 > width
+    l = []
+  endif
+  var r = right
+  var room = width - 2 - Len(l) - (empty(l) ? 0 : 2) - 1
+  if Len(r) > room
+    var text = join(mapnew(r, (_, x) => x[0]), '')
+    r = room > 1 ? [[strcharpart(text, strchars(text) - room + 1) ->substitute('^', '…', ''), '']] : []
+  endif
+  var gap = width - 2 - Len(l) - Len(r) - 1
+  return Draw([['  ', '']] + l + [[repeat(' ', max([gap, 0])), '']] + r + [[' ', '']])
+enddef
+
 # How many screen rows `lines` need in a window `width` cells wide, given a
 # `prefix` cells-wide margin on every line.
 export def DisplayRows(lines: list<string>, width: number, prefix: number): number
@@ -544,4 +567,45 @@ export def FormatTables(lines: list<string>, maxwidth: number): list<list<any>>
     i += 1
   endwhile
   return out
+enddef
+
+# ---------------------------------------------------------------- code fences
+
+const LANG_ALIASES = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', node: 'javascript',
+  jsx: 'javascriptreact', ts: 'typescript', mts: 'typescript', tsx: 'typescriptreact',
+  py: 'python', python3: 'python', py3: 'python',
+  bash: 'sh', shell: 'sh', console: 'sh', shellscript: 'sh', zsh: 'zsh',
+  yml: 'yaml', rb: 'ruby', rs: 'rust', golang: 'go', 'c++': 'cpp', hpp: 'cpp',
+  cs: 'cs', csharp: 'cs', kt: 'kotlin', viml: 'vim', vimscript: 'vim', vim9: 'vim',
+  jsonc: 'json', json5: 'json', psql: 'sql', postgres: 'sql', postgresql: 'sql',
+  dockerfile: 'dockerfile', docker: 'dockerfile', md: 'markdown', htm: 'html',
+  ps1: 'ps1', powershell: 'ps1', tf: 'terraform', hcl: 'terraform', toml: 'toml',
+}
+
+# Language tags of the opening fences in `lines` ("```js" -> 'js'), lowercase.
+export def FenceLangs(lines: list<string>): list<string>
+  var tags: list<string> = []
+  var open = false
+  for l in lines
+    if l =~ '^\s*```\+\s*$'
+      open = false
+    elseif l =~ '^\s*```\+\s*\S'
+      if !open
+        add(tags, tolower(matchstr(l, '^\s*```\+\s*\zs[^ \t{`]\+')))
+      endif
+      open = !open
+    endif
+  endfor
+  return uniq(sort(filter(tags, (_, t) => t != '')))
+enddef
+
+# Vim filetype whose syntax file highlights fence tag `tag`.
+export def LangFiletype(tag: string): string
+  return get(LANG_ALIASES, tolower(tag), tolower(tag))
+enddef
+
+# Regex matching the opening fence line for `tag` (any case, any indent).
+export def FenceStart(tag: string): string
+  return '\c^\s*```\+\s*\V' .. escape(tag, '\') .. '\m\%(\s.*\)\=$'
 enddef

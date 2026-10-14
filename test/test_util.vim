@@ -210,3 +210,25 @@ def g:Test_RenderTable_code_ranges_survive_wrapping()
     assert_equal(strwidth(t.lines[0]), strwidth(l))
   endfor
 enddef
+
+def g:Test_FenceLangs_and_filetypes()
+  var lines = ['  ```js', 'x', '  ```', '```Python title="a"', 'y', '```', '```', 'z', '```', '```c++', '```']
+  assert_equal(['c++', 'js', 'python'], util.FenceLangs(lines))
+  assert_equal(['javascript', 'typescriptreact', 'python', 'sh', 'cpp', 'lua'],
+    mapnew(['js', 'tsx', 'PY', 'bash', 'c++', 'lua'], (_, t) => util.LangFiletype(t)))
+  assert_match(util.FenceStart('c++'), '  ```c++')
+  assert_match(util.FenceStart('js'), '```JS {1,3}')
+  assert_notmatch(util.FenceStart('js'), '```json')
+enddef
+
+def g:Test_Bar_fits_width_and_degrades()
+  var Plain = (x: string): string => substitute(x, '%#[^#]*#', '', 'g')
+  var b = Plain(util.Bar([['file.js:1', '']], [['opus · ask', '']], 40, 'R'))
+  assert_equal(40, strwidth(b))
+  assert_match('^  file.js:1 \+opus · ask $', b)
+  # Narrow: the left side goes first, then the right is cut from the start.
+  assert_equal('       opus · ask ', Plain(util.Bar([['file.js:1', '']], [['opus · ask', '']], 18, 'R')))
+  b = Plain(util.Bar([], [['opus · ask before edits', '']], 12, 'R'))
+  assert_equal(12, strwidth(b))
+  assert_equal('  …re edits ', b)
+enddef

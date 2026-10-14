@@ -31,9 +31,10 @@ scroll, search with |/|, yank, |gf| on file names, fold a message with |zc|.
 While Claude is streaming, a window that is scrolled to the bottom follows
 the output; a window you scrolled back stays where you put it.
 
-The input box sits between two rule lines: the top one shows Claude's
-status, model and permission mode; the bottom one shows key hints and the
-file Claude will be told you are looking at. It grows as you type.
+The input box starts one line tall and grows as you type. Above it is a
+plain rule that shows what Claude is doing while it works; below it, the
+file Claude will be told you are looking at, and the model and permission
+mode (or how to stop Claude while it is busy).
 
 Input box:
   <CR>           send (insert and normal mode); picks the item if the
@@ -162,6 +163,8 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_input_tint*       Give the input box a slightly   Default: v:false
                             different background than Normal.
 *g:claude_include_context*  Tell Claude the current file.   Default: v:true
+*g:claude_fence_syntax*     Highlight ```lang blocks with   Default: v:true
+                            that language's syntax.
 *g:claude_format_tables*    Redraw Markdown tables in       Default: v:true
                             replies as aligned box tables.
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
@@ -172,11 +175,14 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 Highlight groups (override after your colorscheme to restyle):
   ClaudeInput        input box background (default: same as Normal)
   ClaudePromptSign   the ❯ prompt          ClaudePlaceholder  hint text
-  ClaudeRule         the ── rule lines     ClaudeTitle        bar labels
+  ClaudeRule         rule and info line    ClaudeKey          ctrl-c hint
   ClaudeBusy         spinner and status    ClaudeChip         context file
+  ClaudeYou          ❯ You: label          ClaudeAssistant    ✻ Claude: label
+  ClaudeUserText     your messages         ClaudeTime         message times
 
-Code blocks in replies use Markdown highlighting; to highlight languages
-inside fences set |g:markdown_fenced_languages|, e.g. >
-    let g:markdown_fenced_languages = ['python', 'javascript', 'vim', 'sh']
-<
+Fenced code blocks (```js, ```python, ```tsx, ```bash, ...) are highlighted
+with that language's own syntax, loaded the first time it appears. Common
+short tags are understood (js, ts, tsx, py, sh, yml, rb, rs, ...); any other
+tag works when Vim has a syntax file of that name. Disable this with
+|g:claude_fence_syntax|.
  vim:tw=78:ts=8:ft=help:norl:

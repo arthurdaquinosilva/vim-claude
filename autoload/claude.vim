@@ -41,6 +41,11 @@ var text_start = 0          # first line of the text block being streamed
 var turn_header = false     # "✻ Claude" already printed for this turn
 var live_lnum = 0           # line of the "✻ Claude" header showing the spinner
 
+var fence_tags: dict<bool> = {}     # fence tags given a syntax region
+var fence_fts: dict<bool> = {}      # filetypes whose syntax is included
+var fence_pending: list<string> = []  # tags seen while the chat was hidden
+var fence_n = 0
+
 var history: list<string> = []
 var hist_idx = -1
 var file_cache: list<string> = []
@@ -107,6 +112,8 @@ def SetupChatBuf()
   augroup claude_chat
     autocmd! * <buffer>
     autocmd BufWinLeave <buffer> timer_start(0, (_) => CloseOrphanInput())
+    # Syntax was (re)loaded: fence regions are gone, rebuild them.
+    autocmd Syntax <buffer> ResetFenceSyntax()
   augroup END
 enddef
 
@@ -119,6 +126,54 @@ def SetupChatWin()
   setlocal foldmethod=expr foldlevel=99
   &l:foldexpr = "getline(v:lnum) =~# '" .. HDR_PAT .. "' ? '>1' : '1'"
   &l:statusline = '%!claude#StatusLine()'
+  if !empty(fence_pending)
+    var tags = fence_pending
+    fence_pending = []
+    AddFenceSyntax(tags)
+  endif
+enddef
+
+# ---------------------------------------------------------------- code fences
+
+# Highlight ```lang blocks with that language's own syntax, loading it on
+# first use (no need to list languages in g:markdown_fenced_languages).
+def AddFenceSyntax(tags: list<string>)
+  var todo = filter(copy(tags), (_, t) => !has_key(fence_tags, t) && t =~ '^[A-Za-z0-9_+#.-]\+$')
+  if empty(todo) || !Opt('fence_syntax', true)
+    return
+  endif
+  var wins = ChatWins()
+  if empty(wins)
+    fence_pending = uniq(sort(fence_pending + todo))
+    return
+  endif
+  for tag in todo
+    fence_tags[tag] = true
+    var ft = util.LangFiletype(tag)
+    if ft == 'markdown' || ft !~ '^\w\+$' || empty(globpath(&runtimepath, 'syntax/' .. ft .. '.vim'))
+      continue
+    endif
+    # (win_execute() runs these as Vim9 script, like the caller.)
+    var cmds: list<string> = []
+    if !has_key(fence_fts, ft)
+      fence_fts[ft] = true
+      cmds += ['unlet! b:current_syntax',
+        'silent! syntax include @claudeLang_' .. ft .. ' syntax/' .. ft .. '.vim',
+        'b:current_syntax = "claudechat"']
+    endif
+    fence_n += 1
+    add(cmds, printf('syntax region claudeFence%d matchgroup=claudeFenceDelim start=/%s/ end=/^\s*```\+\s*$/ keepend contains=@claudeLang_%s',
+      fence_n, util.FenceStart(tag), ft))
+    win_execute(wins[0], cmds)
+  endfor
+enddef
+
+def ResetFenceSyntax()
+  fence_tags = {}
+  fence_fts = {}
+  if bufexists(chat_buf)
+    AddFenceSyntax(util.FenceLangs(getbufline(chat_buf, 1, '$')))
+  endif
 enddef
 
 def SetupInputBuf()
@@ -205,7 +260,8 @@ def DefineHighlights()
   LinkCodeHighlight()
   highlight default link ClaudeTitle Title
   highlight default link ClaudeBusy Special
-  highlight default link ClaudeChip Directory
+  highlight default link ClaudeChip Comment
+  highlight default link ClaudeKey Special
   highlight default link ClaudePlaceholder Comment
 enddef
 
@@ -247,8 +303,7 @@ def RefreshInput()
   sign_placelist(mapnew(range(1, n), (_, l) => ({group: 'claude_input', buffer: input_buf,
     lnum: l, name: l == 1 ? 'ClaudePrompt' : 'ClaudeCont'})))
   if n == 1 && getbufline(input_buf, 1)[0] == ''
-    var hint = busy ? 'Claude is working…  ctrl-c to stop'
-                    : 'Ask Claude…  @ to mention a file'
+    var hint = busy ? 'Claude is working…' : 'Ask Claude…'
     prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
   endif
   var lines = getbufline(input_buf, 1, '$')
@@ -282,22 +337,21 @@ def UnderChat(input_win: number): bool
   return false
 enddef
 
+# Below the input: a quiet line with the file Claude is told about (or how
+# to stop it while busy) on the left, and the model and mode on the right.
 export def InputStatusLine(winid: number = 0): string
-  var lefts = [
-    [['enter', 'ClaudeTitle'], [' send · ', ''], ['ctrl-j', 'ClaudeTitle'], [' newline · ', ''],
-     ['@', 'ClaudeTitle'], [' file · ', ''], ['ctrl-p', 'ClaudeTitle'], [' history', '']],
-    [['enter', 'ClaudeTitle'], [' send · ', ''], ['ctrl-j', 'ClaudeTitle'], [' newline', '']],
-    [['enter', 'ClaudeTitle'], [' send', '']],
-  ]
+  var left: list<list<string>> = []
   if busy
-    lefts = [[['ctrl-c', 'ClaudeTitle'], [' stop', '']]]
+    left = [['ctrl-c', 'ClaudeKey'], [' to stop', '']]
+  else
+    var ctx = get(g:, 'claude_last_ctx', {})
+    if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
+      left = [[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]
+    endif
   endif
-  var right: list<list<string>> = []
-  var ctx = get(g:, 'claude_last_ctx', {})
-  if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
-    right = [[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]
-  endif
-  return util.Rule(lefts, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
+  var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
+  var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
+  return util.Bar(left, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
 enddef
 
 # g:claude_width: columns (> 1) or a fraction of the screen (<= 1); default half.
@@ -491,6 +545,7 @@ def RenderUser(text: string, time: string = strftime('%H:%M'))
   var first = LineCount() + 1
   var lines = mapnew(split(text, "\n", 1), (_, l) => l == '' ? '' : INDENT .. l)
   Append(lines)
+  AddFenceSyntax(util.FenceLangs(lines))
   # Your own message is dimmed, so Claude's replies stand out.
   for i in range(len(lines))
     if lines[i] != ''
@@ -539,6 +594,7 @@ enddef
 def CloseText()
   if text_open
     FormatTablesFrom(text_start)
+    AddFenceSyntax(util.FenceLangs(getbufline(chat_buf, text_start, '$')))
   endif
   text_open = false
 enddef
@@ -579,6 +635,11 @@ def AppendText(s: string)
       appendbufline(chat_buf, '$', mapnew(parts[1 :], (_, p) => p == '' ? '' : INDENT .. p))
     endif
   })
+  # A code fence opened: highlight it as it streams (complete lines only,
+  # so a half-received tag like "```ja" is never used).
+  if len(parts) > 1 && stridx(s, '`') >= 0
+    AddFenceSyntax(util.FenceLangs(getbufline(chat_buf, text_start, LineCount() - 1)))
+  endif
   # A table just ended (a finished non-table line follows table rows):
   # format it now instead of waiting for the end of the block.
   if len(parts) > 1
@@ -609,16 +670,15 @@ enddef
 
 # ---------------------------------------------------------------- status
 
+# Above the input: a plain rule, showing what Claude is doing while busy.
 export def StatusLine(winid: number = 0): string
-  var title = [['✻ Claude', 'ClaudeTitle']]
-  var lefts = [title]
-  if busy
-    var spin = [[' ' .. SPIN[spin_i % len(SPIN)] .. ' ', 'ClaudeBusy']]
-    lefts = [title + spin + [[status_text, 'ClaudeBusy']], title + spin]
+  var width = winwidth(winid != 0 ? winid : g:statusline_winid)
+  if !busy
+    return '%#ClaudeRule#' .. repeat('─', width)
   endif
-  var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
-  var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
-  return util.Rule(lefts, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
+  var spin = SPIN[spin_i % len(SPIN)] .. ' '
+  var label = get(LIVE_LABELS, status_text, status_text .. '…')
+  return util.Rule([[[spin .. label, 'ClaudeBusy']], [[spin, 'ClaudeBusy']]], [], width, 'ClaudeRule')
 enddef
 
 def SetBusy(on: bool, what: string = 'thinking')

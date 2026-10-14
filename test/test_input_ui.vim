@@ -48,23 +48,27 @@ def g:Test_busy_placeholder_and_bars()
   claude.Open()
   var buf = claude.Debug().input_buf
   var input_win = win_getid()
+  var chat_win = win_findbuf(claude.Debug().chat_buf)[0]
+  # Idle: a plain rule above, a quiet info line below.
+  assert_equal(repeat('─', winwidth(chat_win)), Plain(claude.StatusLine(chat_win)))
+  var bar = Plain(claude.InputStatusLine(input_win))
+  assert_equal(winwidth(input_win), strwidth(bar))
+  assert_match('ask before edits $', bar)
+  assert_notmatch('─', bar)
+
   claude.Send('SLOW')
   g:WaitFor('claude#Busy()')
   assert_match('working', Placeholder(buf))
-
-  var bar = Plain(claude.InputStatusLine(input_win))
-  assert_equal(winwidth(input_win), strwidth(bar), bar)
-  assert_match('ctrl-c stop', bar)
-
-  var chat_win = win_findbuf(claude.Debug().chat_buf)[0]
+  bar = Plain(claude.InputStatusLine(input_win))
+  assert_equal(winwidth(input_win), strwidth(bar))
+  assert_match('^  ctrl-c to stop ', bar)
   bar = Plain(claude.StatusLine(chat_win))
   assert_equal(winwidth(chat_win), strwidth(bar))
-  assert_match('^── ✻ Claude [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ', bar)
-  assert_match('ask before edits ──$', bar)
+  assert_match('^── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \%(thinking\|writing\)… ─', bar)
 
   claude.Stop()
-  assert_match('Ask Claude', Placeholder(buf))
-  assert_match('enter send', Plain(claude.InputStatusLine(input_win)))
+  assert_equal('Ask Claude…', Placeholder(buf))
+  assert_notmatch('ctrl-c', Plain(claude.InputStatusLine(input_win)))
 enddef
 
 def g:Test_panel_windows_have_no_colorcolumn()
