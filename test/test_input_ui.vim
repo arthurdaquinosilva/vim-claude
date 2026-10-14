@@ -14,16 +14,24 @@ def g:Test_prompt_sign_and_placeholder()
   claude.NewChat()
   claude.Open()
   var buf = claude.Debug().input_buf
-  var signs = sign_getplaced(buf, {group: 'claude_input'})[0].signs
-  assert_equal([[1, 'ClaudePrompt']], mapnew(signs, (_, s) => [s.lnum, s.name]))
-  assert_match('Ask Claude', Placeholder(buf))
-  assert_equal('ClaudeInput', &wincolor)
+  var Texts = (lnum: number, type: string): list<string> =>
+    filter(prop_list(lnum, {bufnr: buf}), (_, p) => p.type == type)->map((_, p) => p.text)
+  assert_equal(['❯ '], Texts(1, 'claude_prompt'))
+  assert_equal('Ask Claude…', Placeholder(buf))
+  assert_equal([repeat('─', winwidth(0))], Texts(1, 'claude_border'))
 
   setline(1, ['hello', 'world'])
   doautocmd TextChanged
   assert_equal('', Placeholder(buf))
-  signs = sign_getplaced(buf, {group: 'claude_input'})[0].signs
-  assert_equal([[1, 'ClaudePrompt'], [2, 'ClaudeCont']], mapnew(signs, (_, s) => [s.lnum, s.name]))
+  assert_equal(['❯ '], Texts(1, 'claude_prompt'))
+  assert_equal(['  '], Texts(2, 'claude_indent'))
+  # The border moves under the last line.
+  assert_equal([], Texts(1, 'claude_border'))
+  assert_equal(1, len(Texts(2, 'claude_border')))
+  # Typing at the very start of a line keeps the text after the prompt.
+  execute "normal! ggIX\<Esc>"
+  assert_equal('Xhello', getline(1))
+  assert_equal(1, filter(prop_list(1, {bufnr: buf}), (_, p) => p.type == 'claude_prompt')[0].col)
 enddef
 
 def g:Test_input_grows_with_content_and_is_capped()
@@ -31,16 +39,16 @@ def g:Test_input_grows_with_content_and_is_capped()
   claude.Open()
   deletebufline('%', 1, '$')
   doautocmd TextChanged
-  assert_equal(1, winheight(0))
+  assert_equal(2, winheight(0))   # one line plus the bottom border
   setline(1, map(range(6), (_, i) => 'line ' .. i))
   doautocmd TextChanged
-  assert_equal(6, winheight(0))
+  assert_equal(7, winheight(0))
   setline(1, map(range(40), (_, i) => 'line ' .. i))
   doautocmd TextChanged
   assert_equal(12, winheight(0))
   deletebufline('%', 1, '$')
   doautocmd TextChanged
-  assert_equal(1, winheight(0))
+  assert_equal(2, winheight(0))
 enddef
 
 def g:Test_busy_placeholder_and_bars()

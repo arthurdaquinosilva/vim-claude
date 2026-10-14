@@ -31,8 +31,8 @@ scroll, search with |/|, yank, |gf| on file names, fold a message with |zc|.
 While Claude is streaming, a window that is scrolled to the bottom follows
 the output; a window you scrolled back stays where you put it.
 
-The input box starts one line tall and grows as you type. Above it is a
-plain rule that shows what Claude is doing while it works; below it, the
+The input box starts one line tall and grows as you type. It sits between
+two rules; the top one shows what Claude is doing while it works. Below,
 file Claude will be told you are looking at, and the model and permission
 mode (or how to stop Claude while it is busy).
 
@@ -159,6 +159,8 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_height*           Panel height for 'bottom'.      Default: 18
 *g:claude_input_height*     Minimum input box height; it    Default: 1
                             grows with what you type.
+*g:claude_input_border*     Draw a rule under the input     Default: v:true
+                            box, above the info line.
 *g:claude_input_max_height* Maximum input box height.       Default: 12
 *g:claude_input_tint*       Give the input box a slightly   Default: v:false
                             different background than Normal.

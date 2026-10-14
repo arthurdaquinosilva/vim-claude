@@ -204,6 +204,10 @@ def SetupInputBuf()
   nnoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
 
   prop_type_add('claude_placeholder', {bufnr: input_buf, highlight: 'ClaudePlaceholder'})
+  # start_incl: text typed at the start of a line goes after the "❯ ".
+  prop_type_add('claude_prompt', {bufnr: input_buf, highlight: 'ClaudePromptSign', start_incl: true})
+  prop_type_add('claude_indent', {bufnr: input_buf, start_incl: true})
+  prop_type_add('claude_border', {bufnr: input_buf, highlight: 'ClaudeRule'})
 
   augroup claude_input
     autocmd! * <buffer>
@@ -215,7 +219,8 @@ def SetupInputBuf()
 enddef
 
 def SetupInputWin()
-  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=yes foldcolumn=0
+  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=no foldcolumn=0
+  &l:showbreak = '  '   # wrapped rows line up after the "❯ " prompt
   setlocal nocursorline nocursorcolumn colorcolumn= winfixheight winfixwidth
   &l:fillchars = &g:fillchars .. ',eob: '
   &l:wincolor = 'ClaudeInput'
@@ -247,8 +252,6 @@ def DefineHighlights()
   execute printf('highlight default ClaudePromptSign ctermfg=%s guifg=%s ctermbg=%s guibg=%s cterm=bold gui=bold',
     get(spfg, 'ctermfg', 'NONE'), get(spfg, 'guifg', 'NONE'),
     get(inbg, 'ctermbg', 'NONE'), get(inbg, 'guibg', 'NONE'))
-  sign_define('ClaudePrompt', {text: '❯', texthl: 'ClaudePromptSign'})
-  sign_define('ClaudeCont', {text: ' ', texthl: 'ClaudeInputSign'})
   # Speakers: you in the prompt color, Claude in Claude's orange.
   highlight default ClaudeAssistant ctermfg=173 guifg=#d97757 cterm=bold gui=bold
   highlight default ClaudeLive ctermfg=173 guifg=#d97757
@@ -300,20 +303,28 @@ def RefreshInput()
   endif
   var n = getbufinfo(input_buf)[0].linecount
   prop_clear(1, n, {bufnr: input_buf})
-  # "❯" on the first line, tinted blanks on the rest (signs never shift).
-  sign_unplace('claude_input', {buffer: input_buf})
-  sign_placelist(mapnew(range(1, n), (_, l) => ({group: 'claude_input', buffer: input_buf,
-    lnum: l, name: l == 1 ? 'ClaudePrompt' : 'ClaudeCont'})))
+  # "❯ " before the first line, a matching indent before the others.
+  for l in range(1, n)
+    prop_add(l, 1, {bufnr: input_buf, type: l == 1 ? 'claude_prompt' : 'claude_indent',
+      text: l == 1 ? '❯ ' : '  '})
+  endfor
   if n == 1 && getbufline(input_buf, 1)[0] == ''
     var hint = busy ? 'Claude is working…' : 'Ask Claude…'
     prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
+  endif
+  # Bottom border: a rule drawn under the last line, as wide as the window.
+  var border = Opt('input_border', true)
+  var wins = filter(InputWins(), (_, id) => win_id2tabwin(id)[0] == tabpagenr())
+  if border
+    prop_add(n, 0, {bufnr: input_buf, type: 'claude_border', text_align: 'below',
+      text: repeat('─', empty(wins) ? &columns : winwidth(wins[0]))})
   endif
   var lines = getbufline(input_buf, 1, '$')
   # Only resize an input box stacked right under the chat: in any other
   # layout (e.g. the chat was just :q'd) resizing would squash its neighbours.
   for w in filter(InputWins(), (_, id) => UnderChat(id))
-    var rows = util.DisplayRows(lines, winwidth(w) - 2, 0)
-    var h = min([max([rows, Opt('input_height', 1)]), Opt('input_max_height', 12)])
+    var rows = util.DisplayRows(lines, winwidth(w), 2) + (border ? 1 : 0)
+    var h = min([max([rows, Opt('input_height', 1) + (border ? 1 : 0)]), Opt('input_max_height', 12)])
     if winheight(w) != h
       win_execute(w, 'resize ' .. h)
     endif
