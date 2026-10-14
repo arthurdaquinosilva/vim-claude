@@ -1,0 +1,159 @@
+*claude.txt*  Claude Code chat, explain and inline edit for Vim 9
+
+==============================================================================
+CONTENTS                                                      *claude-contents*
+
+  1. Requirements ............ |claude-requirements|
+  2. Chat panel .............. |claude-chat|
+  3. Selections and context .. |claude-context|
+  4. Inline edit ............. |claude-edit|
+  5. Permissions ............. |claude-permissions|
+  6. Commands ................ |claude-commands|
+  7. Mappings ................ |claude-mappings|
+  8. Options ................. |claude-options|
+
+==============================================================================
+1. REQUIREMENTS                                           *claude-requirements*
+
+- Vim 9.0+ with |+job|, |+channel|, |+timers| and |+popupwin|.
+- The Claude Code CLI (`claude`) on your $PATH, already logged in. The
+  plugin drives `claude -p` in stream-json mode, so it uses your existing
+  subscription or API key and runs Claude Code's tools in Vim's |getcwd()|.
+
+==============================================================================
+2. CHAT PANEL                                                     *claude-chat*
+
+|:ClaudeToggle| (<Leader>cc) opens a panel on the right: the transcript on
+top and a small input box below.
+
+The transcript is an ordinary read-only buffer, so all of Vim works in it:
+scroll, search with |/|, yank, |gf| on file names, fold a message with |zc|.
+While Claude is streaming, a window that is scrolled to the bottom follows
+the output; a window you scrolled back stays where you put it.
+
+Input box:
+  <CR>           send (insert and normal mode)
+  <C-j>          new line (also <S-CR> where the terminal supports it)
+  @              complete a project file name (git ls-files)
+  <C-p> <C-n>    previous / next sent message
+  <C-c>          stop Claude
+  q              close the panel (normal mode)
+
+Transcript:
+  i a o <CR>     jump to the input box
+  ]] [[          next / previous message
+  gy             yank the code block under the cursor (also to "+)
+  <C-c>          stop Claude
+  q              close the panel
+
+The statusline shows a spinner and what Claude is doing (thinking, using a
+tool), the model, and the permission mode. Each reply ends with its duration.
+
+The conversation is one Claude Code session; messages share context until
+|:ClaudeNew|. Earlier sessions for the current directory can be reopened with
+|:ClaudeResume|.
+
+==============================================================================
+3. SELECTIONS AND CONTEXT                                      *claude-context*
+
+Explain: select lines and press <Leader>ce (or `:'<,'>ClaudeExplain`). The
+code is sent with its file name and line numbers, and shown in the transcript
+so you can see what was asked.
+
+Ask about a selection: `:'<,'>Claude is this thread safe?`
+
+Add to chat: <Leader>ca (or `:'<,'>ClaudeAdd`) puts a mention such as
+`@src/app.py#L10-24` into the input box. When the message is sent, the
+lines are attached from the buffer, so unsaved changes are included.
+Without a range it mentions the whole file (`@src/app.py`), which Claude
+reads itself.
+
+Each message also tells Claude which file and line you were on last
+(disable with |g:claude_include_context|).
+
+==============================================================================
+4. INLINE EDIT                                                    *claude-edit*
+
+Select lines and press <Leader>ci (or `:'<,'>ClaudeEdit add error handling`).
+Without an instruction you are prompted for one. Claude rewrites only the
+selection; the result opens in a new tab as a diff, your buffer on the left
+and the proposal on the right:
+
+  ga             accept the whole proposal (one undo step: |u| reverts it)
+  gr  q          reject
+  do  dp         take or put single hunks with normal |diff| commands
+
+You can also edit the proposal buffer before accepting.
+If the buffer changes while Claude is working, the proposal is discarded.
+
+==============================================================================
+5. PERMISSIONS                                            *claude-permissions*
+
+Claude Code asks before editing files or running commands. When a tool call
+is blocked, a popup offers:
+
+  Allow for this session    allow that tool (for Bash: that exact command)
+  Allow all file edits      switch to acceptEdits mode
+  Deny
+
+After you allow, Claude retries automatically, and buffers for files it changed
+are reloaded. The starting mode is |g:claude_permission_mode|; switch with
+|:ClaudeMode|.
+
+==============================================================================
+6. COMMANDS                                                   *claude-commands*
+
+:Claude [text]               *:Claude*
+    Open the panel, or send [text]. With a range: send the selection with
+    [text] as the question, or add it to the input box if [text] is empty.
+:ClaudeToggle                *:ClaudeToggle*   Show / hide the panel.
+:ClaudeOpen  :ClaudeClose    *:ClaudeOpen* *:ClaudeClose*
+:[range]ClaudeExplain        *:ClaudeExplain*  Explain range (default: file).
+:[range]ClaudeAdd            *:ClaudeAdd*      Mention range in the input box.
+:[range]ClaudeEdit [instr]   *:ClaudeEdit*     Inline edit with diff review.
+:ClaudeAccept :ClaudeReject  *:ClaudeAccept* *:ClaudeReject*
+:ClaudeEditCancel            *:ClaudeEditCancel*  Cancel a running edit.
+:ClaudeStop                  *:ClaudeStop*     Interrupt the current reply.
+:ClaudeNew                   *:ClaudeNew*      Start a new conversation.
+:ClaudeResume                *:ClaudeResume*   Reopen an earlier conversation.
+:ClaudeModel [name]          *:ClaudeModel*    opus, sonnet, haiku, default,
+                                               or any model id.
+:ClaudeMode [mode]           *:ClaudeMode*     default, acceptEdits, plan,
+                                               bypassPermissions.
+
+==============================================================================
+7. MAPPINGS                                                   *claude-mappings*
+
+Normal mode               Visual mode
+  <Leader>cc  toggle        <Leader>cc  add selection to input
+  <Leader>ce  explain file  <Leader>ce  explain selection
+  <Leader>ca  add file      <Leader>ca  add selection to input
+  <Leader>ci  edit line     <Leader>ci  edit selection
+  <Leader>cn  new chat
+  <Leader>cr  resume
+  <Leader>cm  pick model
+  <Leader>cp  pick permission mode
+
+Set |g:claude_no_mappings| to define your own.
+
+==============================================================================
+8. OPTIONS                                                     *claude-options*
+
+*g:claude_cmd*              CLI to run: string or list.     Default: 'claude'
+*g:claude_model*            Model alias or id.              Default: CLI default
+*g:claude_edit_model*       Model for |:ClaudeEdit|.        Default: g:claude_model
+*g:claude_permission_mode*  Starting mode.                  Default: 'default'
+*g:claude_position*         'right', 'left' or 'bottom'.    Default: 'right'
+*g:claude_width*            Panel width.                    Default: 40% of 'columns'
+*g:claude_height*           Panel height for 'bottom'.      Default: 18
+*g:claude_input_height*     Input box height.               Default: 5
+*g:claude_include_context*  Tell Claude the current file.   Default: v:true
+*g:claude_show_cost*        Show API cost in reply footers. Default: v:false
+*g:claude_extra_args*       Extra CLI arguments (list).     Default: []
+*g:claude_no_mappings*      Skip default mappings.          Default: v:false
+
+Code blocks in replies use Markdown highlighting; to highlight languages
+inside fences set |g:markdown_fenced_languages|, e.g. >
+    let g:markdown_fenced_languages = ['python', 'javascript', 'vim', 'sh']
+<
+ vim:tw=78:ts=8:ft=help:norl:

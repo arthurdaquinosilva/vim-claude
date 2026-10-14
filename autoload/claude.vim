@@ -1,0 +1,969 @@
+vim9script
+# claude.vim — chat panel backed by a long-running `claude -p` process that
+# speaks stream-json on stdin/stdout.
+
+import autoload 'claude/util.vim'
+
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const HDR_USER = '▌ You'
+const HDR_CLAUDE = '▌ Claude'
+const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+
+var chat_buf = -1
+var input_buf = -1
+
+var job: job = null_job
+var gen = 0                 # bumps on every process start; stale callbacks are ignored
+var proc_sig = ''           # args the running process was started with
+var session_id = ''
+var model_name = ''         # as reported by the CLI
+var model = ''              # as requested by the user ('' = CLI default)
+var perm_mode = ''
+var session_allowed: list<string> = []
+
+var busy = false
+var status_text = ''
+var spin_i = 0
+var spin_timer = 0
+var turn_start: list<any> = []
+var stderr_tail: list<string> = []
+
+var last_kind = ''          # 'user' | 'header' | 'text' | 'tool' | 'info'
+var text_open = false
+var streamed = false        # current assistant message arrived via deltas
+var touched_files = false
+var turn_header = false     # "▌ Claude" already printed for this turn
+
+var history: list<string> = []
+var hist_idx = -1
+var file_cache: list<string> = []
+
+def Opt(name: string, default: any): any
+  return get(g:, 'claude_' .. name, default)
+enddef
+
+def Mode(): string
+  return perm_mode != '' ? perm_mode : Opt('permission_mode', 'default')
+enddef
+
+def Model(): string
+  return model != '' ? model : Opt('model', '')
+enddef
+
+def Warn(msg: string)
+  echohl WarningMsg | echomsg 'claude: ' .. msg | echohl None
+enddef
+
+# ---------------------------------------------------------------- panel
+
+def ChatWins(): list<number>
+  return bufexists(chat_buf) ? win_findbuf(chat_buf) : []
+enddef
+
+def InputWins(): list<number>
+  return bufexists(input_buf) ? win_findbuf(input_buf) : []
+enddef
+
+export def IsOpen(): bool
+  return !empty(filter(ChatWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr()))
+enddef
+
+def SetupChatBuf()
+  setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+  setlocal nomodifiable
+  setlocal filetype=claudechat
+  silent! file claude://chat
+  chat_buf = bufnr()
+
+  nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
+  nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
+  for key in ['i', 'a', 'I', 'A', 'o', 'O', '<CR>']
+    execute 'nnoremap <buffer><silent> ' .. key .. ' <ScriptCmd>FocusInput(true)<CR>'
+  endfor
+  nnoremap <buffer><silent> ]] <ScriptCmd>search('^▌ ', 'W')<CR>
+  nnoremap <buffer><silent> [[ <ScriptCmd>search('^▌ ', 'bW')<CR>
+  nnoremap <buffer><silent> gy <ScriptCmd>YankCodeBlock()<CR>
+
+  augroup claude_chat
+    autocmd! * <buffer>
+    autocmd BufWinLeave <buffer> timer_start(0, (_) => CloseOrphanInput())
+  augroup END
+enddef
+
+def SetupChatWin()
+  setlocal wrap linebreak breakindent nonumber norelativenumber nolist nospell
+  setlocal signcolumn=no foldcolumn=0 winfixwidth conceallevel=2
+  setlocal foldmethod=expr foldlevel=99
+  &l:foldexpr = "getline(v:lnum) =~# '^▌ ' ? '>1' : '1'"
+  &l:statusline = '%!claude#StatusLine()'
+enddef
+
+def SetupInputBuf()
+  setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+  setlocal filetype=claudeinput
+  silent! file claude://input
+  input_buf = bufnr()
+  &l:omnifunc = 'claude#CompleteMention'
+
+  inoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
+  inoremap <buffer> <S-CR> <CR>
+  nnoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
+  inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
+  nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
+  nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
+  inoremap <buffer><silent> <C-p> <ScriptCmd>History(-1)<CR>
+  inoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
+  nnoremap <buffer><silent> <C-p> <ScriptCmd>History(-1)<CR>
+  nnoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
+
+  augroup claude_input
+    autocmd! * <buffer>
+    autocmd TextChangedI <buffer> MaybeComplete()
+  augroup END
+enddef
+
+def SetupInputWin()
+  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=no
+  setlocal winfixheight winfixwidth
+  &l:statusline = ' Enter send · C-j newline · @ file · C-p/C-n history · C-c stop'
+enddef
+
+def CreatePanel()
+  var pos = Opt('position', 'right')
+  var width = Opt('width', max([50, &columns * 2 / 5]))
+  if pos == 'left'
+    topleft vsplit
+    execute 'vertical resize ' .. width
+  elseif pos == 'bottom'
+    botright split
+    execute 'resize ' .. Opt('height', 18)
+  else
+    botright vsplit
+    execute 'vertical resize ' .. width
+  endif
+  if bufexists(chat_buf)
+    execute 'silent buffer ' .. chat_buf
+  else
+    silent enew
+    SetupChatBuf()
+  endif
+  SetupChatWin()
+  var chat_win = win_getid()
+
+  belowright split
+  execute 'resize ' .. Opt('input_height', 5)
+  if bufexists(input_buf)
+    execute 'silent buffer ' .. input_buf
+  else
+    silent enew
+    SetupInputBuf()
+  endif
+  SetupInputWin()
+  win_execute(chat_win, 'normal! G')
+enddef
+
+export def Open(focus: bool = true)
+  if !IsOpen()
+    var from = win_getid()
+    CreatePanel()
+    if !focus
+      win_gotoid(from)
+    endif
+  endif
+  if focus
+    FocusInput(true)
+  endif
+enddef
+
+export def Toggle()
+  if IsOpen()
+    Close()
+  else
+    Open()
+  endif
+enddef
+
+export def Close()
+  for w in InputWins() + ChatWins()
+    if win_id2tabwin(w)[0] == tabpagenr() && winnr('$') > 1
+      execute 'silent! :' .. win_id2win(w) .. 'close'
+    endif
+  endfor
+enddef
+
+def CloseOrphanInput()
+  if empty(ChatWins())
+    for w in InputWins()
+      if winnr('$') > 1
+        execute 'silent! :' .. win_id2win(w) .. 'close'
+      endif
+    endfor
+  endif
+enddef
+
+def FocusInput(insert: bool)
+  if !IsOpen()
+    CreatePanel()
+  endif
+  var wins = filter(InputWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr())
+  if empty(wins)
+    # Input window was closed on its own; recreate it under the chat window.
+    win_gotoid(filter(ChatWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr())[0])
+    belowright split
+    execute 'resize ' .. Opt('input_height', 5)
+    execute 'silent buffer ' .. input_buf
+    SetupInputWin()
+  else
+    win_gotoid(wins[0])
+  endif
+  if insert
+    normal! G$
+    startinsert!
+  endif
+enddef
+
+# ---------------------------------------------------------------- render
+
+# Run `F` with the chat buffer modifiable, keeping windows that were at the
+# bottom glued to the bottom (and leaving scrolled-back windows alone).
+def Modify(F: func)
+  if !bufexists(chat_buf)
+    return
+  endif
+  var follow = filter(ChatWins(), (_, w) => line('.', w) >= line('$', w))
+  setbufvar(chat_buf, '&modifiable', 1)
+  F()
+  setbufvar(chat_buf, '&modifiable', 0)
+  for w in follow
+    win_execute(w, 'normal! G')
+  endfor
+enddef
+
+def LastLine(): string
+  return getbufline(chat_buf, '$')[0]
+enddef
+
+def BufEmpty(): bool
+  return getbufinfo(chat_buf)[0].linecount == 1 && getbufline(chat_buf, 1)[0] == ''
+enddef
+
+def Append(lines: list<string>)
+  Modify(() => {
+    if BufEmpty()
+      setbufline(chat_buf, 1, lines)
+    else
+      appendbufline(chat_buf, '$', lines)
+    endif
+  })
+enddef
+
+def EnsureBlank()
+  if bufexists(chat_buf) && LastLine() != ''
+    Append([''])
+  endif
+enddef
+
+def EnsureChatBuf()
+  if bufexists(chat_buf)
+    return
+  endif
+  var from = win_getid()
+  CreatePanel()
+  win_gotoid(from)
+enddef
+
+def Header(name: string)
+  CloseText()
+  if bufexists(chat_buf) && !BufEmpty()
+    EnsureBlank()
+  endif
+  Append([name])
+  last_kind = 'header'
+enddef
+
+def RenderUser(text: string)
+  Header(HDR_USER)
+  turn_header = false
+  Append(split(text, "\n", 1))
+  last_kind = 'user'
+enddef
+
+def Info(line: string)
+  CloseText()
+  if last_kind == 'text' || last_kind == 'user'
+    EnsureBlank()
+  endif
+  Append(['  ' .. line])
+  last_kind = 'info'
+enddef
+
+def BeginText()
+  if text_open
+    return
+  endif
+  if last_kind != 'header'
+    EnsureBlank()
+  endif
+  Append([''])
+  text_open = true
+  last_kind = 'text'
+enddef
+
+def CloseText()
+  text_open = false
+enddef
+
+def AppendText(s: string)
+  if s == ''
+    return
+  endif
+  BeginText()
+  var parts = split(s, "\n", 1)
+  Modify(() => {
+    setbufline(chat_buf, '$', getbufline(chat_buf, '$')[0] .. parts[0])
+    if len(parts) > 1
+      appendbufline(chat_buf, '$', parts[1 :])
+    endif
+  })
+enddef
+
+def EnsureClaudeHeader()
+  if !turn_header
+    Header(HDR_CLAUDE)
+    turn_header = true
+  endif
+enddef
+
+export def Clear()
+  CloseText()
+  last_kind = ''
+  if bufexists(chat_buf)
+    Modify(() => deletebufline(chat_buf, 1, '$'))
+  endif
+enddef
+
+# ---------------------------------------------------------------- status
+
+export def StatusLine(): string
+  var left = ' Claude'
+  if busy
+    left ..= '  ' .. SPIN[spin_i % len(SPIN)] .. ' ' .. status_text
+  endif
+  var m = model_name != '' ? model_name : (Model() != '' ? Model() : 'default model')
+  var right = m .. ' · ' .. Mode() .. ' '
+  return substitute(left, '%', '%%', 'g') .. '%=' .. substitute(right, '%', '%%', 'g')
+enddef
+
+def SetBusy(on: bool, what: string = 'thinking')
+  busy = on
+  status_text = what
+  if on && spin_timer == 0
+    turn_start = reltime()
+    spin_timer = timer_start(100, (_) => {
+      spin_i += 1
+      redrawstatus!
+    }, {repeat: -1})
+  elseif !on && spin_timer != 0
+    timer_stop(spin_timer)
+    spin_timer = 0
+  endif
+  redrawstatus!
+enddef
+
+# ---------------------------------------------------------------- process
+
+def Running(): bool
+  return job_status(job) == 'run'
+enddef
+
+def BuildArgs(): list<string>
+  var cmd = Opt('cmd', 'claude')
+  var args = type(cmd) == v:t_list ? copy(cmd) : [cmd]
+  args += ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
+    '--verbose', '--include-partial-messages',
+    '--append-system-prompt', 'You are running inside a Vim chat panel. Your replies are '
+      .. 'rendered as Markdown in a narrow, wrapped text buffer; keep tables narrow. '
+      .. '@path and @path#Lx-y refer to files in the project.']
+  if Model() != ''
+    args += ['--model', Model()]
+  endif
+  if Mode() != 'default'
+    args += ['--permission-mode', Mode()]
+  endif
+  if session_id != ''
+    args += ['--resume', session_id]
+  endif
+  args += Opt('extra_args', [])
+  if !empty(session_allowed)
+    args += ['--allowedTools'] + session_allowed
+  endif
+  return args
+enddef
+
+def StopProcess()
+  if !Running()
+    return
+  endif
+  gen += 1  # silence its callbacks
+  job_stop(job, 'term')
+  var n = 0
+  while job_status(job) == 'run' && n < 100
+    sleep 10m
+    n += 1
+  endwhile
+  if job_status(job) == 'run'
+    job_stop(job, 'kill')
+  endif
+enddef
+
+def EnsureProcess(): bool
+  var cmd = Opt('cmd', 'claude')
+  var exe = type(cmd) == v:t_list ? cmd[0] : cmd
+  if !executable(exe)
+    Warn('`' .. exe .. '` not found. Install Claude Code or set g:claude_cmd.')
+    return false
+  endif
+  var sig = string([Model(), Mode(), session_allowed, Opt('extra_args', [])])
+  if Running() && sig == proc_sig
+    return true
+  endif
+  StopProcess()
+  gen += 1
+  var g = gen
+  stderr_tail = []
+  job = job_start(BuildArgs(), {
+    out_mode: 'nl', err_mode: 'nl', noblock: true, cwd: getcwd(),
+    out_cb: (_, msg) => {
+      if g == gen
+        OnEvent(msg)
+      endif
+    },
+    err_cb: (_, msg) => {
+      if g == gen
+        AddStderr(msg)
+      endif
+    },
+    exit_cb: (_, code) => {
+      if g == gen
+        OnExit(code)
+      endif
+    },
+  })
+  if job_status(job) != 'run'
+    Warn('failed to start ' .. exe)
+    return false
+  endif
+  proc_sig = sig
+  return true
+enddef
+
+def AddStderr(msg: string)
+  add(stderr_tail, msg)
+  if len(stderr_tail) > 20
+    remove(stderr_tail, 0)
+  endif
+enddef
+
+def OnExit(code: number)
+  if busy
+    Info('✖ Claude process exited (code ' .. code .. ')')
+    for l in stderr_tail[-5 :]
+      Info('  ' .. l)
+    endfor
+    FinishTurn()
+  endif
+enddef
+
+def FinishTurn()
+  CloseText()
+  SetBusy(false)
+  if touched_files
+    touched_files = false
+    # Reload files Claude edited; buffers with unsaved changes still prompt.
+    var ar = &autoread
+    set autoread
+    silent! checktime
+    &autoread = ar
+  endif
+enddef
+
+def SendRaw(payload: string): bool
+  if !EnsureProcess()
+    return false
+  endif
+  var msg = {type: 'user', message: {role: 'user', content: payload}}
+  ch_sendraw(job, json_encode(msg) .. "\n")
+  streamed = false
+  turn_header = false
+  SetBusy(true, 'thinking')
+  return true
+enddef
+
+# ---------------------------------------------------------------- events
+
+def IsSubagent(ev: dict<any>): bool
+  return type(get(ev, 'parent_tool_use_id', v:null)) == v:t_string
+enddef
+
+def OnEvent(line: string)
+  var ev: any
+  try
+    ev = json_decode(line)
+  catch
+    return
+  endtry
+  if type(ev) != v:t_dict
+    return
+  endif
+  var t = get(ev, 'type', '')
+  if t == 'system'
+    if get(ev, 'subtype', '') == 'init'
+      session_id = get(ev, 'session_id', session_id)
+      model_name = get(ev, 'model', model_name)
+    endif
+  elseif t == 'stream_event'
+    if !IsSubagent(ev)
+      OnStreamEvent(get(ev, 'event', {}))
+    endif
+  elseif t == 'assistant'
+    if !IsSubagent(ev)
+      OnAssistant(get(ev, 'message', {}))
+    endif
+  elseif t == 'user'
+    OnToolResults(ev)
+  elseif t == 'result'
+    OnResult(ev)
+  endif
+enddef
+
+def OnStreamEvent(e: dict<any>)
+  var et = get(e, 'type', '')
+  if et == 'message_start'
+    streamed = false
+  elseif et == 'content_block_start'
+    var block = get(e, 'content_block', {})
+    var bt = get(block, 'type', '')
+    if bt == 'thinking' || bt == 'redacted_thinking'
+      status_text = 'thinking'
+    elseif bt == 'tool_use'
+      status_text = 'using ' .. get(block, 'name', 'tool')
+    elseif bt == 'text'
+      status_text = 'responding'
+      EnsureClaudeHeader()
+    endif
+  elseif et == 'content_block_delta'
+    var d = get(e, 'delta', {})
+    if get(d, 'type', '') == 'text_delta'
+      streamed = true
+      EnsureClaudeHeader()
+      AppendText(get(d, 'text', ''))
+    endif
+  elseif et == 'content_block_stop'
+    CloseText()
+  endif
+enddef
+
+def OnAssistant(msg: dict<any>)
+  for c in get(msg, 'content', [])
+    var ct = get(c, 'type', '')
+    if ct == 'tool_use'
+      EnsureClaudeHeader()
+      var name = get(c, 'name', '')
+      if index(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'], name) >= 0
+        touched_files = true
+      endif
+      Info('● ' .. util.ToolSummary(name, get(c, 'input', {})))
+      last_kind = 'tool'
+    elseif ct == 'text' && !streamed
+      # CLI without partial messages: render the whole block at once.
+      EnsureClaudeHeader()
+      AppendText(get(c, 'text', ''))
+      CloseText()
+    endif
+  endfor
+enddef
+
+def OnToolResults(ev: dict<any>)
+  var content = get(get(ev, 'message', {}), 'content', [])
+  if type(content) != v:t_list || IsSubagent(ev)
+    return
+  endif
+  for c in content
+    if type(c) == v:t_dict && get(c, 'type', '') == 'tool_result' && get(c, 'is_error', false)
+      var body = get(c, 'content', '')
+      var text = type(body) == v:t_string ? body : (type(body) == v:t_list && !empty(body) ? get(body[0], 'text', '') : '')
+      if text !~ 'permission\|denied\|requested permissions'
+        Info('  ⎿ ' .. strcharpart(substitute(text, '\n.*', '', ''), 0, 100))
+        last_kind = 'tool'
+      endif
+    endif
+  endfor
+  status_text = 'thinking'
+enddef
+
+def OnResult(ev: dict<any>)
+  var secs = printf('%.1fs', reltimefloat(reltime(turn_start)))
+  if get(ev, 'is_error', false) || get(ev, 'subtype', 'success') != 'success'
+    var r = get(ev, 'result', '')
+    Info('✖ ' .. (type(r) == v:t_string && r != '' ? r : get(ev, 'subtype', 'error')))
+  endif
+  var denials = get(ev, 'permission_denials', [])
+  var footer = '── ' .. secs
+  var cost = get(ev, 'total_cost_usd', 0.0)
+  if Opt('show_cost', false) && type(cost) == v:t_float
+    footer ..= printf(' · $%.4f', cost)
+  endif
+  if type(denials) == v:t_list && !empty(denials)
+    var what = map(copy(denials), (_, d) => util.ToolSummary(get(d, 'tool_name', ''), get(d, 'tool_input', {})))
+    Info('! Needs permission: ' .. join(uniq(sort(what)), ', '))
+  endif
+  Info(footer)
+  FinishTurn()
+  if type(denials) == v:t_list && !empty(denials)
+    AskPermission(denials)
+  endif
+enddef
+
+# ---------------------------------------------------------------- permissions
+
+def AskPermission(denials: list<dict<any>>)
+  var rules = uniq(sort(map(copy(denials), (_, d) => util.DenialRule(d))))
+  var what = uniq(sort(map(copy(denials), (_, d) => util.ToolSummary(get(d, 'tool_name', ''), get(d, 'tool_input', {})))))
+  var choices = ['Allow for this session', 'Allow all file edits (acceptEdits mode)', 'Deny']
+  var opts = {
+    title: ' Claude wants to: ' .. join(what, ', ') .. ' ',
+    padding: [0, 1, 0, 1], border: [],
+    callback: (_, choice) => {
+      OnPermissionChoice(choice, rules)
+    },
+  }
+  if exists('*popup_menu') && !Opt('no_popups', false)
+    popup_menu(choices, opts)
+  else
+    OnPermissionChoice(inputlist(['Claude wants to: ' .. join(what, ', ')]
+      + map(copy(choices), (i, c) => (i + 1) .. '. ' .. c)), rules)
+  endif
+enddef
+
+def OnPermissionChoice(choice: number, rules: list<string>)
+  if choice == 1
+    session_allowed = uniq(sort(session_allowed + rules))
+    Info('✓ Allowed for this session: ' .. join(rules, ', '))
+  elseif choice == 2
+    perm_mode = 'acceptEdits'
+    Info('✓ Switched to acceptEdits mode')
+  else
+    Info('✗ Denied')
+    return
+  endif
+  SendRaw('Permission granted. Please retry what was blocked and continue.')
+enddef
+
+# ---------------------------------------------------------------- sending
+
+def EditorContext(): string
+  if !Opt('include_context', true)
+    return ''
+  endif
+  var ctx = get(g:, 'claude_last_ctx', {})
+  if empty(ctx) || get(ctx, 'file', '') == ''
+    return ''
+  endif
+  return "\n\n" .. util.CTX_MARKER .. 'The user is looking at ' .. util.RelPath(ctx.file)
+    .. ' (cursor on line ' .. ctx.line .. ' of ' .. ctx.total .. ') in Vim.</editor-context>'
+enddef
+
+def MentionLines(path: string, l1: number, l2: number): list<string>
+  var b = bufnr(path)
+  if b > 0 && bufloaded(b)
+    return getbufline(b, l1, l2)
+  endif
+  if filereadable(path)
+    return readfile(path, '', l2)[l1 - 1 :]
+  endif
+  return []
+enddef
+
+export def Send(text: string, display: string = '')
+  if trim(text) == ''
+    return
+  endif
+  if busy
+    Warn('Claude is still responding — press Ctrl-C in the panel to stop it')
+    return
+  endif
+  EnsureChatBuf()
+  if !IsOpen()
+    Open(false)
+  endif
+  if empty(history) || history[-1] != text
+    add(history, text)
+  endif
+  hist_idx = -1
+  file_cache = []
+  RenderUser(display != '' ? display : text)
+  var mentions = util.FindRangeMentions(text)
+  for m in mentions
+    Info('⎘ ' .. util.RangeLabel(m.path, m.l1, m.l2))
+  endfor
+  # Jump every chat window to the bottom when the user sends.
+  for w in ChatWins()
+    win_execute(w, 'normal! G')
+  endfor
+  if !SendRaw(util.ExpandMentions(text, MentionLines) .. EditorContext())
+    Info('✖ Not sent')
+  endif
+enddef
+
+def SubmitInput()
+  var text = join(getbufline(input_buf, 1, '$'), "\n")
+  if trim(text) == ''
+    return
+  endif
+  if busy
+    Warn('Claude is still responding — Ctrl-C to stop')
+    return
+  endif
+  deletebufline(input_buf, 1, '$')
+  Send(trim(text, "\n"))
+enddef
+
+def History(dir: number)
+  if empty(history)
+    return
+  endif
+  hist_idx = hist_idx < 0 ? (dir < 0 ? len(history) - 1 : -1) : hist_idx + dir
+  if hist_idx < 0 || hist_idx >= len(history)
+    hist_idx = -1
+    deletebufline(input_buf, 1, '$')
+    return
+  endif
+  deletebufline(input_buf, 1, '$')
+  setbufline(input_buf, 1, split(history[hist_idx], "\n", 1))
+  normal! G$
+enddef
+
+export def Stop()
+  if !busy
+    return
+  endif
+  # StopProcess silences the process callbacks, so report it here.
+  StopProcess()
+  Info('■ Interrupted')
+  FinishTurn()
+enddef
+
+# ---------------------------------------------------------------- commands
+
+# :Claude [text] with an optional range.
+export def Command(args: string, count: number, l1: number, l2: number)
+  if count > 0
+    if args == ''
+      AddToInput(l1, l2)
+    else
+      SendSelection(l1, l2, args)
+    endif
+  elseif args != ''
+    Send(args)
+  else
+    Open()
+  endif
+enddef
+
+def SendSelection(l1: number, l2: number, question: string)
+  var path = expand('%:p')
+  var text = util.ExplainPrompt(path, &filetype, l1, l2, getline(l1, l2), question)
+  Send(text)
+enddef
+
+export def Explain(l1: number, l2: number)
+  SendSelection(l1, l2, '')
+enddef
+
+export def AddToInput(l1: number, l2: number)
+  var path = expand('%:p')
+  if path == ''
+    # Unnamed buffer: there is no path to mention, so paste the code itself.
+    var code = util.CodeBlock(getline(l1, l2), &filetype)
+    Open()
+    appendbufline(input_buf, '$', code)
+    return
+  endif
+  var mention = util.Mention(path, l1, l2, line('$'))
+  Open()
+  var last = getbufline(input_buf, '$')[0]
+  setbufline(input_buf, '$', last .. (last =~ '\S$' ? ' ' : '') .. mention .. ' ')
+  normal! G$
+  startinsert!
+enddef
+
+export def NewChat()
+  StopProcess()
+  SetBusy(false)
+  session_id = ''
+  model_name = ''
+  session_allowed = []
+  Clear()
+  echo 'claude: new conversation'
+enddef
+
+export def SetModel(name: string)
+  if name == ''
+    var choices = ['default', 'opus', 'sonnet', 'haiku']
+    popup_menu(choices, {title: ' Claude model ', padding: [0, 1, 0, 1], border: [],
+      callback: (_, i) => {
+        if i > 0
+          SetModel(choices[i - 1])
+        endif
+      }})
+    return
+  endif
+  model = name == 'default' ? '' : name
+  model_name = ''
+  if Running() && !busy
+    StopProcess()
+  endif
+  echo 'claude: model ' .. (model == '' ? 'default' : model) .. ' (applies to the next message)'
+  redrawstatus!
+enddef
+
+export def SetMode(name: string)
+  if name == ''
+    popup_menu(MODES, {title: ' Permission mode ', padding: [0, 1, 0, 1], border: [],
+      callback: (_, i) => {
+        if i > 0
+          SetMode(MODES[i - 1])
+        endif
+      }})
+    return
+  endif
+  if index(MODES, name) < 0
+    Warn('unknown mode ' .. name .. ' (' .. join(MODES, ', ') .. ')')
+    return
+  endif
+  perm_mode = name
+  if Running() && !busy
+    StopProcess()
+  endif
+  echo 'claude: permission mode ' .. name
+  redrawstatus!
+enddef
+
+export def CompleteModes(..._): string
+  return join(MODES, "\n")
+enddef
+
+export def CompleteModels(..._): string
+  return join(['default', 'opus', 'sonnet', 'haiku'], "\n")
+enddef
+
+export def Resume()
+  var dir = expand('~/.claude/projects/') .. util.ProjectKey(getcwd())
+  var files = glob(dir .. '/*.jsonl', false, true)
+  sort(files, (a, b) => getftime(b) - getftime(a))
+  var items: list<dict<any>> = []
+  for f in files[: 29]
+    var title = util.TranscriptTitle(readfile(f, '', 400))
+    if title != ''
+      add(items, {file: f, title: strftime('%m-%d %H:%M', getftime(f)) .. '  ' .. title})
+    endif
+  endfor
+  if empty(items)
+    Warn('no previous conversations for ' .. getcwd())
+    return
+  endif
+  popup_menu(mapnew(items, (_, it) => it.title), {
+    title: ' Resume conversation ', padding: [0, 1, 0, 1], border: [], maxheight: 20,
+    callback: (_, i) => {
+      if i > 0
+        LoadSession(items[i - 1].file)
+      endif
+    }})
+enddef
+
+def LoadSession(file: string)
+  NewChat()
+  session_id = fnamemodify(file, ':t:r')
+  Open(false)
+  for e in util.ParseTranscript(readfile(file))
+    if e.role == 'user'
+      RenderUser(e.text)
+    elseif e.kind == 'tool'
+      EnsureClaudeHeader()
+      Info('● ' .. e.text)
+      last_kind = 'tool'
+    else
+      EnsureClaudeHeader()
+      AppendText(e.text)
+      CloseText()
+    endif
+  endfor
+  Info('── resumed session ' .. session_id)
+  for w in ChatWins()
+    win_execute(w, 'normal! G')
+  endfor
+enddef
+
+def YankCodeBlock()
+  var r = util.CodeBlockAt(getline(1, '$'), line('.'))
+  if empty(r)
+    Warn('cursor is not inside a code block')
+    return
+  endif
+  var text = getline(r[0], r[1])
+  setreg('"', text, 'l')
+  if has('clipboard')
+    silent! setreg('+', text, 'l')
+  endif
+  echo 'claude: yanked ' .. len(text) .. ' lines'
+enddef
+
+# ---------------------------------------------------------------- @mentions
+
+def ProjectFiles(): list<string>
+  if empty(file_cache)
+    if executable('git')
+      file_cache = systemlist('git ls-files --cached --others --exclude-standard 2>/dev/null')
+      if v:shell_error != 0
+        file_cache = []
+      endif
+    endif
+    if empty(file_cache)
+      file_cache = filter(glob('**/*', false, true), (_, f) => !isdirectory(f))
+    endif
+    file_cache = file_cache[: 20000]
+  endif
+  return file_cache
+enddef
+
+export def CompleteMention(findstart: number, base: string): any
+  if findstart
+    var before = strpart(getline('.'), 0, col('.') - 1)
+    var at = match(before, '\%(^\|\s\)\zs@\S*$')
+    if at < 0
+      return -3
+    endif
+    return at + 1  # keep the '@' outside the completed text
+  endif
+  var files = ProjectFiles()
+  var hits = base == '' ? files[: 199] : matchfuzzy(files, base)[: 199]
+  return {words: hits, refresh: 'always'}
+enddef
+
+def MaybeComplete()
+  var before = strpart(getline('.'), 0, col('.') - 1)
+  if before =~ '\%(^\|\s\)@$' && !pumvisible()
+    feedkeys("\<C-x>\<C-o>", 'n')
+  endif
+enddef
+
+# ---------------------------------------------------------------- tests
+
+export def Busy(): bool
+  return busy
+enddef
+
+export def Debug(): dict<any>
+  return {chat_buf: chat_buf, input_buf: input_buf, busy: busy, session_id: session_id,
+    args: BuildArgs(), allowed: session_allowed, mode: Mode()}
+enddef
