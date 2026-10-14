@@ -294,3 +294,19 @@ def g:Test_unbalanced_backticks_do_not_spill_into_next_message()
   var done = index(ChatLines(), '  Done.') + 1
   assert_notmatch('Code', join(synstack(done, 3)->map((_, id) => synIDattr(id, 'name'))))
 enddef
+
+def g:Test_code_fences_work_inside_wrapping_markdown_regions()
+  # vim-polyglot's Markdown wraps paragraphs in a region (mkdNonListItemBlock)
+  # whose 'contains' only lists its own items; fences must still get through.
+  Reset()
+  claude.Open()
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  syntax region testWrapBlock start=/^\ze  \S/ end=/^\ze✻ Claude:$/ contains=markdownCode keepend containedin=claudeMsgClaude,claudeMsgYou
+  # Like a fresh session: the Markdown syntax exists before any fence rule.
+  doautocmd Syntax
+  claude.Send('CODE please')
+  g:WaitFor('!claude#Busy()')
+  var lnum = index(ChatLines(), '  function f() { return x; }') + 1
+  var names = join(synstack(lnum, 3)->map((_, id) => synIDattr(id, 'name')), ' ')
+  assert_match('claudeFence\d\+ .*javaScript', names)
+enddef

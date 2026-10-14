@@ -162,7 +162,9 @@ def AddFenceSyntax(tags: list<string>)
         'b:current_syntax = "claudechat"']
     endif
     fence_n += 1
-    add(cmds, printf('syntax region claudeFence%d matchgroup=claudeFenceDelim start=/%s/ end=/^\s*```\+\s*$/ keepend contains=@claudeLang_%s',
+    # containedin=ALL: some Markdown syntaxes (vim-polyglot) wrap paragraphs
+    # in regions that only allow their own code block inside.
+    add(cmds, printf('syntax region claudeFence%d matchgroup=claudeFenceDelim start=/%s/ end=/^\s*```\+\s*$/ keepend containedin=ALL contains=@claudeLang_%s',
       fence_n, util.FenceStart(tag), ft))
     win_execute(wins[0], cmds)
   endfor
