@@ -130,6 +130,9 @@ def g:Test_Rule_fills_exact_width_and_degrades()
   assert_equal(12, strdisplaywidth(Plain(util.Rule([[['abc', '']]], [['wide right', '']], 12, 'R'))))
   assert_equal('───', Plain(util.Rule([[['abcdef', '']]], [], 3, 'R')))
   assert_match('100%%', util.Rule([[['100%', '']]], [], 20, 'R'))
+  # Prefers shorter hints with the right side over long hints without it.
+  s = Plain(util.Rule([[['long long long hints', '']], [['hints', '']]], [['file.py:3', '']], 30, 'R'))
+  assert_match('^── hints ─\+ file.py:3 ──$', s)
 enddef
 
 def g:Test_DisplayRows()

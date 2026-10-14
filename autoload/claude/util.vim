@@ -310,16 +310,17 @@ enddef
 # Statusline drawn as a horizontal rule exactly `width` cells wide:
 #   ── <left> ─────────── <right> ──
 # `lefts` are alternatives from richest to plainest; the first that fits is
-# used. Segments are [text, highlight group]; '' group means the rule color.
+# used. The right side is dropped only when even the plainest left won't
+# fit beside it. Segments are [text, highlight group]; '' = rule color.
 export def Rule(lefts: list<list<list<string>>>, right: list<list<string>>, width: number, rule_hl: string): string
   var Len = (segs: list<list<string>>): number =>
     reduce(segs, (acc, s) => acc + strdisplaywidth(s[0]), 0)
   var Draw = (segs: list<list<string>>): string =>
     join(mapnew(segs, (_, s) => '%#' .. (s[1] == '' ? rule_hl : s[1]) .. '#'
       .. substitute(s[0], '%', '%%', 'g')), '')
-  var r = right
-  for left in lefts + [[]]
-    for rr in [r, []]
+  # Keep the right side as long as possible, shortening the left first.
+  for rr in [right, []]
+    for left in lefts + [[]]
       # '── ' left ' ' fill [' ' right ' '] '──'
       var used = 3 + Len(left) + 1 + (empty(rr) ? 0 : Len(rr) + 2) + 2
       if used < width
