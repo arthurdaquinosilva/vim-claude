@@ -334,16 +334,17 @@ export def Rule(lefts: list<list<list<string>>>, right: list<list<string>>, widt
 enddef
 
 # Plain statusline exactly `width` cells wide: "  <left>     <right> ".
-# The left side is dropped first when space runs out, then the right side
-# is cut short.
-export def Bar(left: list<list<string>>, right: list<list<string>>, width: number, hl: string): string
+# The left side is dropped first when space runs out (unless keep_left),
+# then the right side is cut short.
+export def Bar(left: list<list<string>>, right: list<list<string>>, width: number, hl: string, keep_left: bool = false): string
   var Len = (segs: list<list<string>>): number =>
     reduce(segs, (acc, s) => acc + strwidth(s[0]), 0)
   var Draw = (segs: list<list<string>>): string =>
     join(mapnew(segs, (_, s) => '%#' .. (s[1] == '' ? hl : s[1]) .. '#'
       .. substitute(s[0], '%', '%%', 'g')), '')
   var l = left
-  if 2 + Len(l) + 2 + Len(right) + 1 > width
+  # keep_left: shorten the right side first, as long as a bit of it fits.
+  if 2 + Len(l) + 2 + Len(right) + 1 > width && !(keep_left && width - 2 - Len(l) - 2 - 1 >= 6)
     l = []
   endif
   var r = right

@@ -1,5 +1,6 @@
 vim9script
 import autoload 'claude.vim'
+import autoload 'claude/util.vim'
 
 def Placeholder(buf: number): string
   var p = filter(prop_list(1, {bufnr: buf}), (_, x) => get(x, 'type', '') == 'claude_placeholder')
@@ -16,22 +17,20 @@ def g:Test_prompt_sign_and_placeholder()
   var buf = claude.Debug().input_buf
   var Texts = (lnum: number, type: string): list<string> =>
     filter(prop_list(lnum, {bufnr: buf}), (_, p) => p.type == type)->map((_, p) => p.text)
-  assert_equal(['❯ '], Texts(1, 'claude_prompt'))
+  var Signs = (): list<list<any>> =>
+    mapnew(sign_getplaced(buf, {group: 'claude_input'})[0].signs, (_, x) => [x.lnum, x.name])
+  assert_equal([[1, 'ClaudePrompt']], Signs())
+  assert_equal('yes', &l:signcolumn)
   assert_equal('Ask Claude…', Placeholder(buf))
-  assert_equal([repeat('─', winwidth(0))], Texts(1, 'claude_border'))
+  assert_equal([repeat('─', winwidth(0) - 2)], Texts(1, 'claude_border'))
 
   setline(1, ['hello', 'world'])
   doautocmd TextChanged
   assert_equal('', Placeholder(buf))
-  assert_equal(['❯ '], Texts(1, 'claude_prompt'))
-  assert_equal(['  '], Texts(2, 'claude_indent'))
+  assert_equal([[1, 'ClaudePrompt']], Signs())
   # The border moves under the last line.
   assert_equal([], Texts(1, 'claude_border'))
   assert_equal(1, len(Texts(2, 'claude_border')))
-  # Typing at the very start of a line keeps the text after the prompt.
-  execute "normal! ggIX\<Esc>"
-  assert_equal('Xhello', getline(1))
-  assert_equal(1, filter(prop_list(1, {bufnr: buf}), (_, p) => p.type == 'claude_prompt')[0].col)
 enddef
 
 def g:Test_input_grows_with_content_and_is_capped()
@@ -57,8 +56,9 @@ def g:Test_busy_placeholder_and_bars()
   var buf = claude.Debug().input_buf
   var input_win = win_getid()
   var chat_win = win_findbuf(claude.Debug().chat_buf)[0]
+  var rule = '  ' .. repeat('─', winwidth(chat_win) - 2)
   # Idle: a plain rule above, a quiet info line below.
-  assert_equal(repeat('─', winwidth(chat_win)), Plain(claude.StatusLine(chat_win)))
+  assert_equal(rule, Plain(claude.StatusLine(chat_win)))
   var bar = Plain(claude.InputStatusLine(input_win))
   assert_equal(winwidth(input_win), strwidth(bar))
   assert_match('ask before edits $', bar)
@@ -70,13 +70,17 @@ def g:Test_busy_placeholder_and_bars()
   bar = Plain(claude.InputStatusLine(input_win))
   assert_equal(winwidth(input_win), strwidth(bar))
   assert_match('^  ctrl-c to stop ', bar)
-  bar = Plain(claude.StatusLine(chat_win))
-  assert_equal(winwidth(chat_win), strwidth(bar))
-  assert_match('^── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \%(thinking\|writing\)… ─', bar)
+  # Activity sits next to the model; the top rule stays plain.
+  # The test window is narrow, so the right side is shortened from its start.
+  assert_match('….* · ask before edits $', bar)
+  var wide = Plain(util.Bar([['ctrl-c', ''], [' to stop', '']],
+    [['⠋ writing…', ''], [' · ', ''], ['ask before edits', '']], 80, 'R', true))
+  assert_match('^  ctrl-c to stop \+⠋ writing… · ask before edits $', wide)
+  assert_equal(rule, Plain(claude.StatusLine(chat_win)))
 
   claude.Stop()
   assert_equal('Ask Claude…', Placeholder(buf))
-  assert_notmatch('ctrl-c', Plain(claude.InputStatusLine(input_win)))
+  assert_notmatch('ctrl-c\|…', Plain(claude.InputStatusLine(input_win)))
 enddef
 
 def g:Test_panel_windows_have_no_colorcolumn()

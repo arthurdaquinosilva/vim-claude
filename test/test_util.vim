@@ -232,3 +232,11 @@ def g:Test_Bar_fits_width_and_degrades()
   assert_equal(12, strwidth(b))
   assert_equal('  …re edits ', b)
 enddef
+
+def g:Test_Bar_keep_left_shortens_right_first()
+  var Plain = (x: string): string => substitute(x, '%#[^#]*#', '', 'g')
+  var b = Plain(util.Bar([['ctrl-c to stop', '']], [['⠋ writing… · opus · ask before edits', '']], 40, 'R', true))
+  assert_equal(40, strwidth(b))
+  assert_match('^  ctrl-c to stop  …', b)
+  assert_match('ask before edits $', b)
+enddef

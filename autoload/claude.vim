@@ -204,9 +204,6 @@ def SetupInputBuf()
   nnoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
 
   prop_type_add('claude_placeholder', {bufnr: input_buf, highlight: 'ClaudePlaceholder'})
-  # start_incl: text typed at the start of a line goes after the "❯ ".
-  prop_type_add('claude_prompt', {bufnr: input_buf, highlight: 'ClaudePromptSign', start_incl: true})
-  prop_type_add('claude_indent', {bufnr: input_buf, start_incl: true})
   prop_type_add('claude_border', {bufnr: input_buf, highlight: 'ClaudeRule'})
 
   augroup claude_input
@@ -219,8 +216,8 @@ def SetupInputBuf()
 enddef
 
 def SetupInputWin()
-  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=no foldcolumn=0
-  &l:showbreak = '  '   # wrapped rows line up after the "❯ " prompt
+  # The "❯" lives in the sign column, so the cursor never lands on it.
+  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=yes foldcolumn=0
   setlocal nocursorline nocursorcolumn colorcolumn= winfixheight winfixwidth
   &l:fillchars = &g:fillchars .. ',eob: '
   &l:wincolor = 'ClaudeInput'
@@ -261,6 +258,7 @@ def DefineHighlights()
   var sp0 = empty(spc) ? {} : spc[0]
   execute printf('highlight default ClaudeYou ctermfg=%s guifg=%s cterm=bold gui=bold',
     get(sp0, 'ctermfg', 'NONE'), get(sp0, 'guifg', 'NONE'))
+  sign_define('ClaudePrompt', {text: '❯', texthl: 'ClaudePromptSign'})
   highlight default link ClaudeRule Comment
   LinkCodeHighlight()
   highlight default link ClaudeTitle Title
@@ -303,27 +301,25 @@ def RefreshInput()
   endif
   var n = getbufinfo(input_buf)[0].linecount
   prop_clear(1, n, {bufnr: input_buf})
-  # "❯ " before the first line, a matching indent before the others.
-  for l in range(1, n)
-    prop_add(l, 1, {bufnr: input_buf, type: l == 1 ? 'claude_prompt' : 'claude_indent',
-      text: l == 1 ? '❯ ' : '  '})
-  endfor
+  sign_unplace('claude_input', {buffer: input_buf})
+  sign_place(0, 'claude_input', 'ClaudePrompt', input_buf, {lnum: 1})
   if n == 1 && getbufline(input_buf, 1)[0] == ''
     var hint = busy ? 'Claude is working…' : 'Ask Claude…'
     prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
   endif
-  # Bottom border: a rule drawn under the last line, as wide as the window.
+  # Bottom border: a rule drawn under the last line (after the sign column,
+  # lined up with the top rule).
   var border = Opt('input_border', true)
   var wins = filter(InputWins(), (_, id) => win_id2tabwin(id)[0] == tabpagenr())
   if border
     prop_add(n, 0, {bufnr: input_buf, type: 'claude_border', text_align: 'below',
-      text: repeat('─', empty(wins) ? &columns : winwidth(wins[0]))})
+      text: repeat('─', (empty(wins) ? &columns : winwidth(wins[0])) - 2)})
   endif
   var lines = getbufline(input_buf, 1, '$')
   # Only resize an input box stacked right under the chat: in any other
   # layout (e.g. the chat was just :q'd) resizing would squash its neighbours.
   for w in filter(InputWins(), (_, id) => UnderChat(id))
-    var rows = util.DisplayRows(lines, winwidth(w), 2) + (border ? 1 : 0)
+    var rows = util.DisplayRows(lines, winwidth(w) - 2, 0) + (border ? 1 : 0)
     var h = min([max([rows, Opt('input_height', 1) + (border ? 1 : 0)]), Opt('input_max_height', 12)])
     if winheight(w) != h
       win_execute(w, 'resize ' .. h)
@@ -364,7 +360,12 @@ export def InputStatusLine(winid: number = 0): string
   endif
   var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
   var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
-  return util.Bar(left, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
+  if busy
+    # What Claude is doing, right next to the model.
+    right = [[SPIN[spin_i % len(SPIN)] .. ' ' .. get(LIVE_LABELS, status_text, status_text .. '…'), 'ClaudeBusy'],
+      [' · ', '']] + right
+  endif
+  return util.Bar(left, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule', busy)
 enddef
 
 # g:claude_width: columns (> 1) or a fraction of the screen (<= 1); default half.
@@ -683,15 +684,10 @@ enddef
 
 # ---------------------------------------------------------------- status
 
-# Above the input: a plain rule, showing what Claude is doing while busy.
+# Above the input: a plain rule, indented like the input text.
 export def StatusLine(winid: number = 0): string
   var width = winwidth(winid != 0 ? winid : g:statusline_winid)
-  if !busy
-    return '%#ClaudeRule#' .. repeat('─', width)
-  endif
-  var spin = SPIN[spin_i % len(SPIN)] .. ' '
-  var label = get(LIVE_LABELS, status_text, status_text .. '…')
-  return util.Rule([[[spin .. label, 'ClaudeBusy']], [[spin, 'ClaudeBusy']]], [], width, 'ClaudeRule')
+  return '%#ClaudeRule#  ' .. repeat('─', max([width - 2, 0]))
 enddef
 
 def SetBusy(on: bool, what: string = 'thinking')
