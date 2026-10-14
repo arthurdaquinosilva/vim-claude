@@ -155,13 +155,19 @@ enddef
 # ---------------------------------------------------------------- look
 
 def DefineHighlights()
-  var dark = &background == 'dark'
-  var normal = hlget('Normal', true)
-  var n = empty(normal) ? {} : normal[0]
-  var cbg = get(n, 'ctermbg', '') =~ '^\d\+$' ? str2nr(n.ctermbg) : -1
-  var gbg = get(n, 'guibg', '') =~ '^#\x\{6}$' ? n.guibg : (dark ? '#1c1c1c' : '#ffffff')
-  execute printf('highlight default ClaudeInput ctermbg=%d guibg=%s',
-    util.ShadeCterm(cbg, dark), util.Shade(gbg, dark ? 0.06 : -0.04))
+  if Opt('input_tint', false)
+    # Opt-in: a shade lighter (dark themes) or darker (light) than Normal.
+    var dark = &background == 'dark'
+    var normal = hlget('Normal', true)
+    var n = empty(normal) ? {} : normal[0]
+    var cbg = get(n, 'ctermbg', '') =~ '^\d\+$' ? str2nr(n.ctermbg) : -1
+    var gbg = get(n, 'guibg', '') =~ '^#\x\{6}$' ? n.guibg : (dark ? '#1c1c1c' : '#ffffff')
+    execute printf('highlight default ClaudeInput ctermbg=%d guibg=%s',
+      util.ShadeCterm(cbg, dark), util.Shade(gbg, dark ? 0.06 : -0.04))
+  else
+    # Same background as the editor (transparent when Normal is).
+    highlight default link ClaudeInput Normal
+  endif
   var inbg = hlget('ClaudeInput', true)[0]
   var sp = hlget('Special', true)
   var spfg = empty(sp) ? {} : sp[0]
