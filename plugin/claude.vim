@@ -39,16 +39,13 @@ augroup claude_track
 augroup END
 
 if !get(g:, 'claude_no_mappings', false)
-  nnoremap <silent> <Leader>cc <Cmd>ClaudeToggle<CR>
-  nnoremap <silent> <Leader>cn <Cmd>ClaudeNew<CR>
-  nnoremap <silent> <Leader>cr <Cmd>ClaudeResume<CR>
-  nnoremap <silent> <Leader>cm <Cmd>ClaudeModel<CR>
-  nnoremap <silent> <Leader>cp <Cmd>ClaudeMode<CR>
-  nnoremap <silent> <Leader>ce <Cmd>ClaudeExplain<CR>
-  nnoremap <silent> <Leader>ca <Cmd>ClaudeAdd<CR>
-  nnoremap <silent> <Leader>ci :ClaudeEdit<CR>
-  xnoremap <silent> <Leader>ce :ClaudeExplain<CR>
-  xnoremap <silent> <Leader>ca :ClaudeAdd<CR>
-  xnoremap <silent> <Leader>ci :ClaudeEdit<CR>
-  xnoremap <silent> <Leader>cc :Claude<CR>
+  var p = get(g:, 'claude_map_prefix', '<Leader>c')
+  for [key, cmd] in [['c', 'ClaudeToggle'], ['n', 'ClaudeNew'], ['r', 'ClaudeResume'],
+      ['m', 'ClaudeModel'], ['p', 'ClaudeMode'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd']]
+    execute 'nnoremap <silent> ' .. p .. key .. ' <Cmd>' .. cmd .. '<CR>'
+  endfor
+  execute 'nnoremap <silent> ' .. p .. 'i :ClaudeEdit<CR>'
+  for [key, cmd] in [['c', 'Claude'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd'], ['i', 'ClaudeEdit']]
+    execute 'xnoremap <silent> ' .. p .. key .. ' :' .. cmd .. '<CR>'
+  endfor
 endif

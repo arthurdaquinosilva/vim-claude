@@ -134,7 +134,9 @@ Normal mode               Visual mode
   <Leader>cm  pick model
   <Leader>cp  pick permission mode
 
-Set |g:claude_no_mappings| to define your own.
+Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
+    let g:claude_map_prefix = '<Leader>i'
+<Set |g:claude_no_mappings| to define your own.
 
 ==============================================================================
 8. OPTIONS                                                     *claude-options*
@@ -150,6 +152,7 @@ Set |g:claude_no_mappings| to define your own.
 *g:claude_include_context*  Tell Claude the current file.   Default: v:true
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
+*g:claude_map_prefix*       Prefix for default mappings.    Default: '<Leader>c'
 *g:claude_no_mappings*      Skip default mappings.          Default: v:false
 
 Code blocks in replies use Markdown highlighting; to highlight languages

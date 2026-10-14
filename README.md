@@ -65,6 +65,7 @@ In the transcript, `]]`/`[[` jump between messages, `gy` yanks a code block and
 let g:claude_model = 'sonnet'               " default: the CLI default
 let g:claude_permission_mode = 'default'    " or acceptEdits / plan
 let g:claude_position = 'right'             " or left / bottom
+let g:claude_map_prefix = '<Leader>c'       " prefix for the mappings above
 let g:markdown_fenced_languages = ['python', 'javascript', 'vim', 'sh']
 ```
 

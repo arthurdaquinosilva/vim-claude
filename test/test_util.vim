@@ -102,3 +102,8 @@ def g:Test_ParseTranscript_and_title()
   assert_equal('Fix the bug', util.TranscriptTitle(lines))
   assert_equal('a b c', util.TranscriptTitle([json_encode({type: 'user', message: {content: "a\n\nb  c"}})]))
 enddef
+
+def g:Test_default_mappings_use_prefix()
+  assert_match('ClaudeToggle', maparg('<Leader>cc', 'n'))
+  assert_match('ClaudeEdit', maparg('<Leader>ci', 'x'))
+enddef
