@@ -338,3 +338,140 @@ export def DisplayRows(lines: list<string>, width: number, prefix: number): numb
   var w = max([width - prefix, 1])
   return reduce(lines, (acc, l) => acc + max([1, (strdisplaywidth(l) + w - 1) / w]), 0)
 enddef
+
+# ---------------------------------------------------------------- tables
+
+const TABLE_SEP = '^\s*|\=\s*:\=-\+:\=\s*\%(|\s*:\=-\+:\=\s*\)*|\=\s*$'
+
+# Split a "| a | b |" row into trimmed cells (honours \| escapes).
+export def TableCells(line: string): list<string>
+  var s = trim(line)
+  s = substitute(s, '^|', '', '')
+  s = substitute(s, '\\\@<!|$', '', '')
+  var cells = split(s, '\\\@<!|', 1)
+  return mapnew(cells, (_, c) => trim(substitute(c, '\\|', '|', 'g')))
+enddef
+
+# Word-wrap `text` to `width` display cells (hard-breaks long words).
+export def WrapText(text: string, width: number): list<string>
+  var out: list<string> = []
+  var cur = ''
+  for w in split(text, ' ')
+    var word = w
+    while strdisplaywidth(word) > width
+      if cur != ''
+        add(out, cur)
+        cur = ''
+      endif
+      var n = width
+      while strdisplaywidth(strcharpart(word, 0, n)) > width
+        n -= 1
+      endwhile
+      add(out, strcharpart(word, 0, n))
+      word = strcharpart(word, n)
+    endwhile
+    if cur == ''
+      cur = word
+    elseif strdisplaywidth(cur) + 1 + strdisplaywidth(word) <= width
+      cur ..= ' ' .. word
+    else
+      add(out, cur)
+      cur = word
+    endif
+  endfor
+  if cur != '' || empty(out)
+    add(out, cur)
+  endif
+  return out
+enddef
+
+def Pad(text: string, width: number, align: string): string
+  var gap = width - strdisplaywidth(text)
+  if align == 'right'
+    return repeat(' ', gap) .. text
+  elseif align == 'center'
+    return repeat(' ', gap / 2) .. text .. repeat(' ', gap - gap / 2)
+  endif
+  return text .. repeat(' ', gap)
+enddef
+
+# Render markdown table lines (header, separator, rows) as a box-drawn
+# table at most `maxwidth` cells wide.
+export def FormatTable(lines: list<string>, maxwidth: number): list<string>
+  var rows = mapnew(lines, (i, l) => i == 1 ? [] : TableCells(l))
+  var aligns = mapnew(TableCells(lines[1]), (_, c) =>
+    c =~ '^:.*:$' ? 'center' : c =~ ':$' ? 'right' : 'left')
+  remove(rows, 1)
+  var ncol = max(mapnew(rows, (_, r) => len(r)))
+  for r in rows
+    while len(r) < ncol
+      add(r, '')
+    endwhile
+  endfor
+  while len(aligns) < ncol
+    add(aligns, 'left')
+  endwhile
+
+  var widths = mapnew(range(ncol), (_, c) =>
+    max([1] + mapnew(rows, (_, r) => strdisplaywidth(r[c]))))
+  # Borders take 3 cells per column plus 1; shrink the widest column until
+  # the table fits (but keep every column at least 6 wide).
+  var budget = maxwidth - (3 * ncol + 1)
+  while reduce(widths, (a, w) => a + w, 0) > budget
+    var widest = index(widths, max(widths))
+    if widths[widest] <= 6
+      break
+    endif
+    widths[widest] -= 1
+  endwhile
+
+  var Border = (l: string, m: string, r: string): string =>
+    l .. join(mapnew(widths, (_, w) => repeat('─', w + 2)), m) .. r
+  var out = [Border('┌', '┬', '┐')]
+  var wrapped = false
+  var body: list<list<string>> = []
+  for r in rows
+    var cells = mapnew(range(ncol), (_, c) => WrapText(r[c], widths[c]))
+    var height = max(mapnew(cells, (_, c) => len(c)))
+    wrapped = wrapped || height > 1
+    var lines_out: list<string> = []
+    for i in range(height)
+      lines_out->add('│' .. join(mapnew(range(ncol), (_, c) =>
+        ' ' .. Pad(get(cells[c], i, ''), widths[c], aligns[c]) .. ' '), '│') .. '│')
+    endfor
+    add(body, lines_out)
+  endfor
+  for i in range(len(body))
+    out += body[i]
+    if i == 0 || (wrapped && i < len(body) - 1)
+      add(out, Border('├', '┼', '┤'))
+    endif
+  endfor
+  add(out, Border('└', '┴', '┘'))
+  return out
+enddef
+
+# Find markdown tables in `lines` (outside fenced code) and return
+# replacements [[first, last, new_lines], ...] with 0-based indexes.
+export def FormatTables(lines: list<string>, maxwidth: number): list<list<any>>
+  var out: list<list<any>> = []
+  var fence = ''
+  var i = 0
+  while i < len(lines)
+    var l = lines[i]
+    var f = matchstr(l, '^\s*\zs```\+')
+    if f != ''
+      fence = fence == '' ? f : (l =~ '^\s*' .. fence .. '\s*$' ? '' : fence)
+    elseif fence == '' && l =~ '^\s*|.*|\s*$' && i + 1 < len(lines) && lines[i + 1] =~ TABLE_SEP
+      var j = i + 2
+      while j < len(lines) && lines[j] =~ '^\s*|'
+        j += 1
+      endwhile
+      add(out, [i, j - 1, FormatTable(lines[i : j - 1], maxwidth)])
+      i = j
+      continue
+    endif
+    i += 1
+  endwhile
+  return out
+enddef

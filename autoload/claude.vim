@@ -34,6 +34,7 @@ var last_kind = ''          # 'user' | 'header' | 'text' | 'tool' | 'info'
 var text_open = false
 var streamed = false        # current assistant message arrived via deltas
 var touched_files = false
+var text_start = 0          # first line of the text block being streamed
 var turn_header = false     # "▌ Claude" already printed for this turn
 
 var history: list<string> = []
@@ -434,12 +435,35 @@ def BeginText()
     EnsureBlank()
   endif
   Append([''])
+  text_start = getbufinfo(chat_buf)[0].linecount
   text_open = true
   last_kind = 'text'
 enddef
 
 def CloseText()
+  if text_open
+    FormatTablesFrom(text_start)
+  endif
   text_open = false
+enddef
+
+# Redraw markdown tables from line `start` on as aligned box tables.
+def FormatTablesFrom(start: number)
+  if !Opt('format_tables', true) || !bufexists(chat_buf) || start < 1
+    return
+  endif
+  var wins = ChatWins()
+  var width = empty(wins) ? Opt('width', 80) : winwidth(wins[0])
+  var reps = util.FormatTables(getbufline(chat_buf, start, '$'), width - 1)
+  if empty(reps)
+    return
+  endif
+  Modify(() => {
+    for r in reverse(reps)
+      deletebufline(chat_buf, start + r[0], start + r[1])
+      appendbufline(chat_buf, start + r[0] - 1, r[2])
+    endfor
+  })
 enddef
 
 def AppendText(s: string)
@@ -454,6 +478,15 @@ def AppendText(s: string)
       appendbufline(chat_buf, '$', parts[1 :])
     endif
   })
+  # A table just ended (a finished non-table line follows table rows):
+  # format it now instead of waiting for the end of the block.
+  if len(parts) > 1
+    var n = getbufinfo(chat_buf)[0].linecount
+    var done = getbufline(chat_buf, max([text_start, n - 2]), n - 1)
+    if len(done) == 2 && done[0] =~ '^\s*|' && done[1] !~ '^\s*|'
+      FormatTablesFrom(text_start)
+    endif
+  endif
 enddef
 
 def EnsureClaudeHeader()

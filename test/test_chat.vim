@@ -184,3 +184,25 @@ def g:Test_yank_code_block()
   feedkeys('gy', 'xt')
   assert_equal("echo 1\necho 2\n", @")
 enddef
+
+def g:Test_markdown_tables_are_formatted()
+  Reset()
+  claude.Send('TABLE please')
+  g:WaitFor('!claude#Busy()')
+  var lines = ChatLines()
+  var at = index(lines, 'Intro')
+  assert_equal([
+    'Intro',
+    '┌────────┬──────────┐',
+    '│ Action │ Effect   │',
+    '├────────┼──────────┤',
+    '│ `add`  │ Adds one │',
+    '└────────┴──────────┘',
+  ], lines[at : at + 5])
+  assert_equal('', lines[at + 6])
+  assert_equal('After', lines[at + 7])
+  # A table that ends the reply is formatted when the block closes.
+  assert_equal('┌───┬───┐', lines[at + 9])
+  assert_equal('│ a │ 1 │', lines[at + 12])
+  assert_equal(-1, match(lines, '^|'))
+enddef

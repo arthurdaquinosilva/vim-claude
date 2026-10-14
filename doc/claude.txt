@@ -160,6 +160,8 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_input_tint*       Give the input box a slightly   Default: v:false
                             different background than Normal.
 *g:claude_include_context*  Tell Claude the current file.   Default: v:true
+*g:claude_format_tables*    Redraw Markdown tables in       Default: v:true
+                            replies as aligned box tables.
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_map_prefix*       Prefix for default mappings.    Default: '<Leader>c'

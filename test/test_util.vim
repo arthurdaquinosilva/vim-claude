@@ -140,3 +140,46 @@ def g:Test_DisplayRows()
   assert_equal(2, util.DisplayRows([repeat('x', 19)], 20, 2))
   assert_equal(3, util.DisplayRows(['a', 'b', 'c'], 20, 2))
 enddef
+
+def g:Test_TableCells()
+  assert_equal(['a', 'b c', 'x|y'], util.TableCells('| a | b c | x\|y |'))
+  assert_equal(['a', 'b'], util.TableCells('a | b'))
+enddef
+
+def g:Test_WrapText()
+  assert_equal(['hello', 'world'], util.WrapText('hello world', 7))
+  assert_equal(['abcde', 'fgh'], util.WrapText('abcdefgh', 5))
+  assert_equal([''], util.WrapText('', 5))
+enddef
+
+def g:Test_FormatTable_aligned()
+  var t = util.FormatTable(['| Action | Effect |', '|---|--:|', '| `add(x)` | Adds one |', '| set | 2 |'], 80)
+  assert_equal([
+    '┌──────────┬──────────┐',
+    '│ Action   │   Effect │',
+    '├──────────┼──────────┤',
+    '│ `add(x)` │ Adds one │',
+    '│ set      │        2 │',
+    '└──────────┴──────────┘'], t)
+enddef
+
+def g:Test_FormatTable_wraps_to_width()
+  var t = util.FormatTable(['| Name | Description |', '|---|---|',
+    '| setQuantity | Updates one item quantity at the given index |', '| a | b |'], 30)
+  for l in t
+    assert_true(strdisplaywidth(l) <= 30, l)
+  endfor
+  assert_equal(strdisplaywidth(t[0]), strdisplaywidth(t[-1]))
+  assert_match('│ setQuantity │ Updates one  │\n│             │ item         │', join(t, "\n"))
+  # Wrapped rows get a separator between them (plus the header one).
+  assert_equal(2, len(filter(copy(t), (_, l) => l =~ '^├')))
+enddef
+
+def g:Test_FormatTables_skips_code_and_finds_ranges()
+  var lines = ['intro', '| a | b |', '|---|---|', '| 1 | 2 |', 'after',
+    '```', '| x | y |', '|---|---|', '```']
+  var r = util.FormatTables(lines, 80)
+  assert_equal(1, len(r))
+  assert_equal([1, 3], r[0][0 : 1])
+  assert_equal('┌───┬───┐', r[0][2][0])
+enddef

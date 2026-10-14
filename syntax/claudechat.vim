@@ -17,6 +17,7 @@ syntax match claudeAttach /^  ↳ .*$/
 syntax match claudeError  /^  [✖!] .*$/
 syntax match claudeOk     /^  [✓✗■] .*$/
 syntax match claudeFooter /^  ── .*$/
+syntax match claudeTableBorder /[┌┬┐├┼┤└┴┘─│]/
 
 highlight default link claudeUser    Statement
 highlight default link claudeClaude  Special
@@ -26,5 +27,6 @@ highlight default link claudeAttach  Directory
 highlight default link claudeError   ErrorMsg
 highlight default link claudeOk      MoreMsg
 highlight default link claudeFooter  NonText
+highlight default link claudeTableBorder Comment
 
 b:current_syntax = 'claudechat'

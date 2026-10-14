@@ -27,6 +27,16 @@ while IFS= read -r line; do
     sleep 30
     continue
   fi
+  if [[ "$line" == *TABLE* ]]; then
+    se '{"type":"message_start"}'
+    se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
+    for chunk in 'Intro\n| Act' 'ion | Effect |\n|---|' '---|\n| `add` | Adds one |\n' '\nAfter\n\n| K | V |\n|---|---|\n| a | 1 |'; do
+      se "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"$chunk\"}}"
+    done
+    se '{"type":"content_block_stop","index":0}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    continue
+  fi
   if [[ "$line" == *DRIP* ]]; then
     se '{"type":"message_start"}'
     se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
