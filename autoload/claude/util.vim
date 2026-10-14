@@ -279,3 +279,61 @@ export def TranscriptTitle(jsonl: list<string>): string
   endfor
   return ''
 enddef
+
+# Blend a #rrggbb color toward white (amount > 0) or black (amount < 0).
+export def Shade(hex: string, amount: float): string
+  if hex !~ '^#\x\{6}$'
+    return hex
+  endif
+  var out = '#'
+  for i in [1, 3, 5]
+    var c = str2nr(hex[i : i + 1], 16)
+    var t = amount > 0 ? c + (255 - c) * amount : c * (1.0 + amount)
+    out ..= printf('%02x', float2nr(round(t)))
+  endfor
+  return out
+enddef
+
+# A slightly lighter (dark themes) or darker (light themes) cterm color than
+# `bg`, using the 232-255 grayscale ramp; `bg` < 0 means unknown.
+export def ShadeCterm(bg: number, dark: bool): number
+  if bg >= 232 && bg <= 255
+    return dark ? min([bg + 2, 255]) : max([bg - 2, 232])
+  elseif bg == 0 || bg == 16
+    return 234
+  elseif bg == 15 || bg == 231
+    return 254
+  endif
+  return dark ? 236 : 254
+enddef
+
+# Statusline drawn as a horizontal rule exactly `width` cells wide:
+#   ── <left> ─────────── <right> ──
+# `lefts` are alternatives from richest to plainest; the first that fits is
+# used. Segments are [text, highlight group]; '' group means the rule color.
+export def Rule(lefts: list<list<list<string>>>, right: list<list<string>>, width: number, rule_hl: string): string
+  var Len = (segs: list<list<string>>): number =>
+    reduce(segs, (acc, s) => acc + strdisplaywidth(s[0]), 0)
+  var Draw = (segs: list<list<string>>): string =>
+    join(mapnew(segs, (_, s) => '%#' .. (s[1] == '' ? rule_hl : s[1]) .. '#'
+      .. substitute(s[0], '%', '%%', 'g')), '')
+  var r = right
+  for left in lefts + [[]]
+    for rr in [r, []]
+      # '── ' left ' ' fill [' ' right ' '] '──'
+      var used = 3 + Len(left) + 1 + (empty(rr) ? 0 : Len(rr) + 2) + 2
+      if used < width
+        return Draw([['── ', '']] + left + [[' ' .. repeat('─', width - used), '']]
+          + (empty(rr) ? [] : [[' ', '']] + rr + [[' ', '']]) + [['──', '']])
+      endif
+    endfor
+  endfor
+  return '%#' .. rule_hl .. '#' .. repeat('─', max([width, 0]))
+enddef
+
+# How many screen rows `lines` need in a window `width` cells wide, given a
+# `prefix` cells-wide margin on every line.
+export def DisplayRows(lines: list<string>, width: number, prefix: number): number
+  var w = max([width - prefix, 1])
+  return reduce(lines, (acc, l) => acc + max([1, (strdisplaywidth(l) + w - 1) / w]), 0)
+enddef

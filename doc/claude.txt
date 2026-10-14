@@ -31,10 +31,16 @@ scroll, search with |/|, yank, |gf| on file names, fold a message with |zc|.
 While Claude is streaming, a window that is scrolled to the bottom follows
 the output; a window you scrolled back stays where you put it.
 
+The input box sits between two rule lines: the top one shows Claude's
+status, model and permission mode; the bottom one shows key hints and the
+file Claude will be told you are looking at. It grows as you type.
+
 Input box:
-  <CR>           send (insert and normal mode)
+  <CR>           send (insert and normal mode); picks the item if the
+                 @file menu is open
+  <Tab>          next item in the @file menu
   <C-j>          new line (also <S-CR> where the terminal supports it)
-  @              complete a project file name (git ls-files)
+  @              fuzzy-complete a project file name (git ls-files)
   <C-p> <C-n>    previous / next sent message
   <C-c>          stop Claude
   q              close the panel (normal mode)
@@ -148,12 +154,20 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_position*         'right', 'left' or 'bottom'.    Default: 'right'
 *g:claude_width*            Panel width.                    Default: 40% of 'columns'
 *g:claude_height*           Panel height for 'bottom'.      Default: 18
-*g:claude_input_height*     Input box height.               Default: 5
+*g:claude_input_height*     Minimum input box height; it    Default: 3
+                            grows with what you type.
+*g:claude_input_max_height* Maximum input box height.       Default: 12
 *g:claude_include_context*  Tell Claude the current file.   Default: v:true
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_map_prefix*       Prefix for default mappings.    Default: '<Leader>c'
 *g:claude_no_mappings*      Skip default mappings.          Default: v:false
+
+Highlight groups (override after your colorscheme to restyle):
+  ClaudeInput        input box background (default: a shade of Normal)
+  ClaudePromptSign   the ❯ prompt          ClaudePlaceholder  hint text
+  ClaudeRule         the ── rule lines     ClaudeTitle        bar labels
+  ClaudeBusy         spinner and status    ClaudeChip         context file
 
 Code blocks in replies use Markdown highlighting; to highlight languages
 inside fences set |g:markdown_fenced_languages|, e.g. >

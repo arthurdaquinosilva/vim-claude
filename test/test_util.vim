@@ -107,3 +107,33 @@ def g:Test_default_mappings_use_prefix()
   assert_match('ClaudeToggle', maparg('<Leader>cc', 'n'))
   assert_match('ClaudeEdit', maparg('<Leader>ci', 'x'))
 enddef
+
+def g:Test_Shade()
+  assert_equal('#808080', util.Shade('#000000', 0.5 + 0.002))
+  assert_equal('#808080', util.Shade('#ffffff', -0.5))
+  assert_equal('NONE', util.Shade('NONE', 0.1))
+  assert_equal(236, util.ShadeCterm(234, true))
+  assert_equal(253, util.ShadeCterm(255, false))
+  assert_equal(236, util.ShadeCterm(-1, true))
+enddef
+
+def g:Test_Rule_fills_exact_width_and_degrades()
+  var Plain = (s: string): string => substitute(s, '%#[^#]*#', '', 'g')
+  var s = Plain(util.Rule([[['Claude', 'T']]], [['haiku', '']], 30, 'R'))
+  assert_equal(30, strdisplaywidth(s))
+  assert_match('^── Claude ─\+ haiku ──$', s)
+  # Too narrow for the long left: falls back to the short one.
+  s = Plain(util.Rule([[['a very long hint text here', '']], [['short', '']]], [['x', '']], 20, 'R'))
+  assert_match('^── short ─\+ x ──$', s)
+  assert_equal(20, strdisplaywidth(s))
+  # Too narrow for anything: right side dropped, then plain rule.
+  assert_equal(12, strdisplaywidth(Plain(util.Rule([[['abc', '']]], [['wide right', '']], 12, 'R'))))
+  assert_equal('───', Plain(util.Rule([[['abcdef', '']]], [], 3, 'R')))
+  assert_match('100%%', util.Rule([[['100%', '']]], [], 20, 'R'))
+enddef
+
+def g:Test_DisplayRows()
+  assert_equal(1, util.DisplayRows([''], 20, 2))
+  assert_equal(2, util.DisplayRows([repeat('x', 19)], 20, 2))
+  assert_equal(3, util.DisplayRows(['a', 'b', 'c'], 20, 2))
+enddef

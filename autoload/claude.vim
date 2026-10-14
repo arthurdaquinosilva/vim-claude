@@ -8,6 +8,8 @@ const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '�
 const HDR_USER = '▌ You'
 const HDR_CLAUDE = '▌ Claude'
 const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+const MODE_LABELS = {default: 'ask before edits', acceptEdits: 'auto-accept edits',
+  plan: 'plan mode', bypassPermissions: 'bypass permissions'}
 
 var chat_buf = -1
 var input_buf = -1
@@ -68,7 +70,16 @@ export def IsOpen(): bool
   return !empty(filter(ChatWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr()))
 enddef
 
+# Keep LSP/completion plugins (coc, etc.) from attaching to panel buffers.
+def DetachCompletion()
+  b:coc_enabled = 0
+  b:coc_suggest_disable = 1
+  b:ale_enabled = 0
+  b:copilot_enabled = false
+enddef
+
 def SetupChatBuf()
+  DetachCompletion()
   setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
   setlocal nomodifiable
   setlocal filetype=claudechat
@@ -99,13 +110,18 @@ def SetupChatWin()
 enddef
 
 def SetupInputBuf()
+  DetachCompletion()
   setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
   setlocal filetype=claudeinput
   silent! file claude://input
   input_buf = bufnr()
   &l:omnifunc = 'claude#CompleteMention'
 
-  inoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
+  setlocal completeopt=menuone,noinsert,popup
+  # Enter picks the highlighted @file while the menu is open, otherwise sends.
+  inoremap <buffer><silent><expr> <CR> pumvisible() ? "\<C-y> " : "\<Cmd>call claude#SubmitInput()\<CR>"
+  inoremap <buffer><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
+  inoremap <buffer><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
   inoremap <buffer> <S-CR> <CR>
   nnoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
   inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
@@ -116,16 +132,106 @@ def SetupInputBuf()
   nnoremap <buffer><silent> <C-p> <ScriptCmd>History(-1)<CR>
   nnoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
 
+  prop_type_add('claude_placeholder', {bufnr: input_buf, highlight: 'ClaudePlaceholder'})
+
   augroup claude_input
     autocmd! * <buffer>
-    autocmd TextChangedI <buffer> MaybeComplete()
+    # Refresh first: once the @file menu is open, refreshing is skipped.
+    autocmd TextChanged,TextChangedI,BufWinEnter,CompleteDone <buffer> RefreshInput()
+    autocmd TextChangedI,TextChangedP <buffer> MentionComplete()
+    autocmd WinResized * RefreshInput()
   augroup END
 enddef
 
 def SetupInputWin()
-  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=no
-  setlocal winfixheight winfixwidth
-  &l:statusline = ' Enter send · C-j newline · @ file · C-p/C-n history · C-c stop'
+  setlocal wrap linebreak nonumber norelativenumber nolist signcolumn=yes foldcolumn=0
+  setlocal nocursorline nocursorcolumn colorcolumn= winfixheight winfixwidth
+  &l:fillchars = &g:fillchars .. ',eob: '
+  &l:wincolor = 'ClaudeInput'
+  &l:statusline = '%!claude#InputStatusLine()'
+  RefreshInput()
+enddef
+
+# ---------------------------------------------------------------- look
+
+def DefineHighlights()
+  var dark = &background == 'dark'
+  var normal = hlget('Normal', true)
+  var n = empty(normal) ? {} : normal[0]
+  var cbg = get(n, 'ctermbg', '') =~ '^\d\+$' ? str2nr(n.ctermbg) : -1
+  var gbg = get(n, 'guibg', '') =~ '^#\x\{6}$' ? n.guibg : (dark ? '#1c1c1c' : '#ffffff')
+  execute printf('highlight default ClaudeInput ctermbg=%d guibg=%s',
+    util.ShadeCterm(cbg, dark), util.Shade(gbg, dark ? 0.06 : -0.04))
+  var inbg = hlget('ClaudeInput', true)[0]
+  var sp = hlget('Special', true)
+  var spfg = empty(sp) ? {} : sp[0]
+  execute printf('highlight default ClaudeInputSign ctermbg=%s guibg=%s',
+    get(inbg, 'ctermbg', 'NONE'), get(inbg, 'guibg', 'NONE'))
+  execute printf('highlight default ClaudePromptSign ctermfg=%s guifg=%s ctermbg=%s guibg=%s cterm=bold gui=bold',
+    get(spfg, 'ctermfg', 'NONE'), get(spfg, 'guifg', 'NONE'),
+    get(inbg, 'ctermbg', 'NONE'), get(inbg, 'guibg', 'NONE'))
+  sign_define('ClaudePrompt', {text: '❯', texthl: 'ClaudePromptSign'})
+  sign_define('ClaudeCont', {text: ' ', texthl: 'ClaudeInputSign'})
+  highlight default link ClaudeRule Comment
+  highlight default link ClaudeTitle Title
+  highlight default link ClaudeBusy Special
+  highlight default link ClaudeChip Directory
+  highlight default link ClaudePlaceholder Comment
+enddef
+
+DefineHighlights()
+augroup claude_colors
+  autocmd!
+  autocmd ColorScheme * DefineHighlights()
+augroup END
+
+# Inline "❯ " prompt, continuation indent, placeholder; then fit the height.
+def RefreshInput()
+  # Touching text props or window sizes would close the completion menu.
+  if !bufexists(input_buf) || pumvisible()
+    return
+  endif
+  var n = getbufinfo(input_buf)[0].linecount
+  prop_clear(1, n, {bufnr: input_buf})
+  # "❯" on the first line, tinted blanks on the rest (signs never shift).
+  sign_unplace('claude_input', {buffer: input_buf})
+  sign_placelist(mapnew(range(1, n), (_, l) => ({group: 'claude_input', buffer: input_buf,
+    lnum: l, name: l == 1 ? 'ClaudePrompt' : 'ClaudeCont'})))
+  if n == 1 && getbufline(input_buf, 1)[0] == ''
+    var hint = busy ? 'Claude is working…  ctrl-c to stop'
+                    : 'Ask Claude…  @ to mention a file'
+    prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
+  endif
+  var lines = getbufline(input_buf, 1, '$')
+  for w in filter(InputWins(), (_, id) => win_id2tabwin(id)[0] == tabpagenr())
+    var rows = util.DisplayRows(lines, winwidth(w) - 2, 0)
+    var h = min([max([rows, Opt('input_height', 3)]), Opt('input_max_height', 12)])
+    if winheight(w) != h
+      win_execute(w, 'resize ' .. h)
+    endif
+    if rows <= h && line('w0', w) > 1
+      # Everything fits: show it from the top instead of the scrolled view.
+      win_execute(w, 'winrestview({topline: 1})')
+    endif
+  endfor
+enddef
+
+export def InputStatusLine(): string
+  var lefts = [
+    [['enter', 'ClaudeTitle'], [' send · ', ''], ['ctrl-j', 'ClaudeTitle'], [' newline · ', ''],
+     ['@', 'ClaudeTitle'], [' file · ', ''], ['ctrl-p', 'ClaudeTitle'], [' history', '']],
+    [['enter', 'ClaudeTitle'], [' send · ', ''], ['ctrl-j', 'ClaudeTitle'], [' newline', '']],
+    [['enter', 'ClaudeTitle'], [' send', '']],
+  ]
+  if busy
+    lefts = [[['ctrl-c', 'ClaudeTitle'], [' stop', '']]]
+  endif
+  var right: list<list<string>> = []
+  var ctx = get(g:, 'claude_last_ctx', {})
+  if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
+    right = [[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]
+  endif
+  return util.Rule(lefts, right, winwidth(g:statusline_winid), 'ClaudeRule')
 enddef
 
 def CreatePanel()
@@ -151,7 +257,7 @@ def CreatePanel()
   var chat_win = win_getid()
 
   belowright split
-  execute 'resize ' .. Opt('input_height', 5)
+  execute 'resize ' .. Opt('input_height', 3)
   if bufexists(input_buf)
     execute 'silent buffer ' .. input_buf
   else
@@ -210,7 +316,7 @@ def FocusInput(insert: bool)
     # Input window was closed on its own; recreate it under the chat window.
     win_gotoid(filter(ChatWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr())[0])
     belowright split
-    execute 'resize ' .. Opt('input_height', 5)
+    execute 'resize ' .. Opt('input_height', 3)
     execute 'silent buffer ' .. input_buf
     SetupInputWin()
   else
@@ -345,13 +451,15 @@ enddef
 # ---------------------------------------------------------------- status
 
 export def StatusLine(): string
-  var left = ' Claude'
+  var title = [['✻ Claude', 'ClaudeTitle']]
+  var lefts = [title]
   if busy
-    left ..= '  ' .. SPIN[spin_i % len(SPIN)] .. ' ' .. status_text
+    var spin = [[' ' .. SPIN[spin_i % len(SPIN)] .. ' ', 'ClaudeBusy']]
+    lefts = [title + spin + [[status_text, 'ClaudeBusy']], title + spin]
   endif
-  var m = model_name != '' ? model_name : (Model() != '' ? Model() : 'default model')
-  var right = m .. ' · ' .. Mode() .. ' '
-  return substitute(left, '%', '%%', 'g') .. '%=' .. substitute(right, '%', '%%', 'g')
+  var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
+  var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
+  return util.Rule(lefts, right, winwidth(g:statusline_winid), 'ClaudeRule')
 enddef
 
 def SetBusy(on: bool, what: string = 'thinking')
@@ -367,6 +475,7 @@ def SetBusy(on: bool, what: string = 'thinking')
     timer_stop(spin_timer)
     spin_timer = 0
   endif
+  RefreshInput()
   redrawstatus!
 enddef
 
@@ -704,7 +813,7 @@ export def Send(text: string, display: string = '')
   RenderUser(display != '' ? display : text)
   var mentions = util.FindRangeMentions(text)
   for m in mentions
-    Info('⎘ ' .. util.RangeLabel(m.path, m.l1, m.l2))
+    Info('↳ attached ' .. util.RangeLabel(m.path, m.l1, m.l2))
   endfor
   # Jump every chat window to the bottom when the user sends.
   for w in ChatWins()
@@ -715,7 +824,7 @@ export def Send(text: string, display: string = '')
   endif
 enddef
 
-def SubmitInput()
+export def SubmitInput()
   var text = join(getbufline(input_buf, 1, '$'), "\n")
   if trim(text) == ''
     return
@@ -950,11 +1059,17 @@ export def CompleteMention(findstart: number, base: string): any
   return {words: hits, refresh: 'always'}
 enddef
 
-def MaybeComplete()
+# Fuzzy @file menu, re-filtered on every keystroke. (Omni completion's
+# refresh: 'always' does not re-query while typing, so drive complete().)
+def MentionComplete()
   var before = strpart(getline('.'), 0, col('.') - 1)
-  if before =~ '\%(^\|\s\)@$' && !pumvisible()
-    feedkeys("\<C-x>\<C-o>", 'n')
+  var m = matchstrpos(before, '\%(^\|\s\)\zs@\S*$')
+  if m[1] < 0
+    return
   endif
+  var base = strpart(m[0], 1)
+  var files = ProjectFiles()
+  complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
 enddef
 
 # ---------------------------------------------------------------- tests

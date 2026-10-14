@@ -13,7 +13,7 @@ syntax match claudeUser   /^▌ You$/
 syntax match claudeClaude /^▌ Claude$/
 syntax match claudeTool   /^  ● .*$/
 syntax match claudeToolErr /^    ⎿ .*$/
-syntax match claudeAttach /^  ⎘ .*$/
+syntax match claudeAttach /^  ↳ .*$/
 syntax match claudeError  /^  [✖!] .*$/
 syntax match claudeOk     /^  [✓✗■] .*$/
 syntax match claudeFooter /^  ── .*$/
