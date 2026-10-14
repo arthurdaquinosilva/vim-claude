@@ -31,7 +31,7 @@ def g:Test_input_grows_with_content_and_is_capped()
   claude.Open()
   deletebufline('%', 1, '$')
   doautocmd TextChanged
-  assert_equal(3, winheight(0))
+  assert_equal(1, winheight(0))
   setline(1, map(range(6), (_, i) => 'line ' .. i))
   doautocmd TextChanged
   assert_equal(6, winheight(0))
@@ -40,7 +40,7 @@ def g:Test_input_grows_with_content_and_is_capped()
   assert_equal(12, winheight(0))
   deletebufline('%', 1, '$')
   doautocmd TextChanged
-  assert_equal(3, winheight(0))
+  assert_equal(1, winheight(0))
 enddef
 
 def g:Test_busy_placeholder_and_bars()

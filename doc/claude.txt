@@ -156,7 +156,7 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
                             fraction of the screen (0.5 =
                             half; kept on resize).
 *g:claude_height*           Panel height for 'bottom'.      Default: 18
-*g:claude_input_height*     Minimum input box height; it    Default: 3
+*g:claude_input_height*     Minimum input box height; it    Default: 1
                             grows with what you type.
 *g:claude_input_max_height* Maximum input box height.       Default: 12
 *g:claude_input_tint*       Give the input box a slightly   Default: v:false

@@ -235,7 +235,7 @@ def RefreshInput()
   # layout (e.g. the chat was just :q'd) resizing would squash its neighbours.
   for w in filter(InputWins(), (_, id) => UnderChat(id))
     var rows = util.DisplayRows(lines, winwidth(w) - 2, 0)
-    var h = min([max([rows, Opt('input_height', 3)]), Opt('input_max_height', 12)])
+    var h = min([max([rows, Opt('input_height', 1)]), Opt('input_max_height', 12)])
     if winheight(w) != h
       win_execute(w, 'resize ' .. h)
     endif
@@ -325,7 +325,7 @@ def CreatePanel()
   var chat_win = win_getid()
 
   belowright split
-  execute 'resize ' .. Opt('input_height', 3)
+  execute 'resize ' .. Opt('input_height', 1)
   if bufexists(input_buf)
     execute 'silent buffer ' .. input_buf
   else
@@ -384,7 +384,7 @@ def FocusInput(insert: bool)
     # Input window was closed on its own; recreate it under the chat window.
     win_gotoid(filter(ChatWins(), (_, w) => win_id2tabwin(w)[0] == tabpagenr())[0])
     belowright split
-    execute 'resize ' .. Opt('input_height', 3)
+    execute 'resize ' .. Opt('input_height', 1)
     execute 'silent buffer ' .. input_buf
     SetupInputWin()
   else
