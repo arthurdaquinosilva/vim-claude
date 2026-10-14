@@ -183,3 +183,9 @@ def g:Test_FormatTables_skips_code_and_finds_ranges()
   assert_equal([1, 3], r[0][0 : 1])
   assert_equal('┌───┬───┐', r[0][2][0])
 enddef
+
+def g:Test_FormatTable_strips_bold_markers()
+  var t = util.FormatTable(['| **Name** | __Kind__ |', '|---|---|', '| **a** | b |'], 80)
+  assert_equal('│ Name │ Kind │', t[1])
+  assert_equal('│ a    │ b    │', t[3])
+enddef

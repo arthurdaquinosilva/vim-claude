@@ -349,7 +349,10 @@ export def TableCells(line: string): list<string>
   s = substitute(s, '^|', '', '')
   s = substitute(s, '\\\@<!|$', '', '')
   var cells = split(s, '\\\@<!|', 1)
-  return mapnew(cells, (_, c) => trim(substitute(c, '\\|', '|', 'g')))
+  # Bold markers would be concealed (or shown) unpredictably; drop them.
+  return mapnew(cells, (_, c) => trim(substitute(c, '\\|', '|', 'g')
+    ->substitute('\*\*\(.\{-1,}\)\*\*', '\1', 'g')
+    ->substitute('\<__\(.\{-1,}\)__\>', '\1', 'g')))
 enddef
 
 # Word-wrap `text` to `width` display cells (hard-breaks long words).

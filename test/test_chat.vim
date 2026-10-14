@@ -206,3 +206,21 @@ def g:Test_markdown_tables_are_formatted()
   assert_equal('│ a │ 1 │', lines[at + 12])
   assert_equal(-1, match(lines, '^|'))
 enddef
+
+def g:Test_table_rows_are_not_concealed()
+  # Markdown syntaxes that conceal `code` delimiters must not shift borders.
+  Reset()
+  claude.Send('TABLE please')
+  g:WaitFor('!claude#Busy()')
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  syntax region markdownCode matchgroup=markdownCodeDelimiter start="`" end="`" concealends
+  var lnum = index(ChatLines(), '│ `add`  │ Adds one │') + 1
+  assert_true(lnum > 0)
+  var concealed = 0
+  for col in range(1, strlen(getline(lnum)))
+    concealed += synconcealed(lnum, col)[0]
+  endfor
+  assert_equal(0, concealed)
+  assert_equal(['claudeTableRow', 'claudeTableCode'],
+    synstack(lnum, 6)->map((_, id) => synIDattr(id, 'name')))
+enddef
