@@ -30,16 +30,13 @@ def g:Test_send_streams_reply_tools_and_footer()
   claude.Send('hi there')
   g:WaitFor('!claude#Busy()')
   var lines = ChatLines()
-  assert_equal('❯ You', lines[0])
-  assert_equal('hi there', lines[1])
-  assert_equal('✻ Claude', lines[3])
-  assert_equal('Hello **world**', lines[4])
-  assert_equal('second line', lines[5])
+  assert_equal(['❯ You:', '', '  hi there', '', '✻ Claude:', '', '  Hello **world**', '  second line'],
+    lines[0 : 7])
   assert_notequal(-1, index(lines, '  ● Read src/main.c'))
   assert_notequal(-1, index(lines, '    ⎿ File does not exist.'))
-  assert_notequal(-1, index(lines, 'Done.'))
+  assert_notequal(-1, index(lines, '  Done.'))
   assert_equal(-1, match(lines, 'SUBAGENT'))
-  assert_equal(1, count(lines, '✻ Claude'))
+  assert_equal(1, count(lines, '✻ Claude:'))
   assert_match('^  ── \d\+\.\ds$', lines[-1])
   assert_false(claude.Debug().busy)
   assert_equal('11111111-2222-3333-4444-555555555555', claude.Debug().session_id)
@@ -62,7 +59,7 @@ def g:Test_second_message_reuses_process_and_new_chat_resets()
   claude.Send('one')
   g:WaitFor("!claude#Busy()")
   claude.Send('two')
-  g:WaitFor("count(map(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), 'v:val'), '✻ Claude') == 2 && !claude#Busy()")
+  g:WaitFor("count(map(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), 'v:val'), '✻ Claude:') == 2 && !claude#Busy()")
   assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')))
   claude.NewChat()
   assert_equal([''], ChatLines())
@@ -86,7 +83,7 @@ enddef
 def g:Test_stop_interrupts_a_running_turn()
   Reset()
   claude.Send('SLOW please')
-  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), 'Working') >= 0")
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
   assert_true(claude.Debug().busy)
   claude.Stop()
   assert_false(claude.Debug().busy)
@@ -118,11 +115,11 @@ def g:Test_scrolled_back_window_is_not_dragged_to_bottom()
   g:WaitFor('!claude#Busy()')
   var w = win_findbuf(claude.Debug().chat_buf)[0]
   claude.Send('DRIP')
-  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), 'first') >= 0")
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  first') >= 0")
   win_execute(w, 'normal! gg')   # user scrolls back while Claude is still writing
   g:WaitFor('!claude#Busy()')
   assert_equal(1, line('.', w))
-  assert_notequal(-1, index(ChatLines(), 'more 5'))
+  assert_notequal(-1, index(ChatLines(), '  more 5'))
   # A window left at the bottom follows the stream.
   win_execute(w, 'normal! G')
   claude.Send('three')
@@ -139,7 +136,7 @@ def g:Test_explain_selection_and_add_to_input()
   :2,3ClaudeExplain
   g:WaitFor('!claude#Busy()')
   var text = join(ChatLines(), "\n")
-  assert_match('Explain this code from `.*\.c` (lines 2-3):\n\n```c\nint b;\nint c;\n```', text)
+  assert_match('  Explain this code from `.*\.c` (lines 2-3):\n\n  ```c\n  int b;\n  int c;\n  ```', text)
 
   wincmd p
   wincmd t
@@ -156,7 +153,7 @@ def g:Test_submit_from_input_and_history()
   feedkeys("\<CR>", 'xt')
   g:WaitFor('!claude#Busy()')
   assert_equal([''], getbufline(claude.Debug().input_buf, 1, '$'))
-  assert_equal(['❯ You', 'multi', 'line'], ChatLines()[0 : 2])
+  assert_equal(['❯ You:', '', '  multi', '  line'], ChatLines()[0 : 3])
   feedkeys("\<C-p>", 'xt')
   assert_equal(['multi', 'line'], getbufline(claude.Debug().input_buf, 1, '$'))
 enddef
@@ -178,11 +175,12 @@ def g:Test_yank_code_block()
   claude.Open()
   wincmd k
   setbufvar(bufnr(), '&modifiable', 1)
-  append('$', ['```vim', 'echo 1', 'echo 2', '```'])
+  append('$', ['  ```vim', '  echo 1', '    nested', '  ```'])
   setbufvar(bufnr(), '&modifiable', 0)
   normal! Gk
   feedkeys('gy', 'xt')
-  assert_equal("echo 1\necho 2\n", @")
+  # The transcript's 2-space body indent is removed, nested indent kept.
+  assert_equal("echo 1\n  nested\n", @")
 enddef
 
 def g:Test_markdown_tables_are_formatted()
@@ -190,21 +188,21 @@ def g:Test_markdown_tables_are_formatted()
   claude.Send('TABLE please')
   g:WaitFor('!claude#Busy()')
   var lines = ChatLines()
-  var at = index(lines, 'Intro')
+  var at = index(lines, '  Intro')
   assert_equal([
-    'Intro',
-    '┌────────┬──────────┐',
-    '│ Action │ Effect   │',
-    '├────────┼──────────┤',
-    '│ add    │ Adds one │',
-    '└────────┴──────────┘',
+    '  Intro',
+    '  ┌────────┬──────────┐',
+    '  │ Action │ Effect   │',
+    '  ├────────┼──────────┤',
+    '  │ add    │ Adds one │',
+    '  └────────┴──────────┘',
   ], lines[at : at + 5])
   assert_equal('', lines[at + 6])
-  assert_equal('After', lines[at + 7])
+  assert_equal('  After', lines[at + 7])
   # A table that ends the reply is formatted when the block closes.
-  assert_equal('┌───┬───┐', lines[at + 9])
-  assert_equal('│ a │ 1 │', lines[at + 12])
-  assert_equal(-1, match(lines, '^|'))
+  assert_equal('  ┌───┬───┐', lines[at + 9])
+  assert_equal('  │ a │ 1 │', lines[at + 12])
+  assert_equal(-1, match(lines, '^\s*|'))
 enddef
 
 def g:Test_table_rows_are_not_concealed()
@@ -214,7 +212,7 @@ def g:Test_table_rows_are_not_concealed()
   g:WaitFor('!claude#Busy()')
   win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
   syntax region markdownCode matchgroup=markdownCodeDelimiter start="`" end="`" concealends
-  var lnum = index(ChatLines(), '│ add    │ Adds one │') + 1
+  var lnum = index(ChatLines(), '  │ add    │ Adds one │') + 1
   assert_true(lnum > 0)
   var concealed = 0
   for col in range(1, strlen(getline(lnum)))
@@ -241,17 +239,18 @@ enddef
 def g:Test_headers_show_time_and_live_indicator()
   Reset()
   claude.Send('SLOW please')
-  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), 'Working') >= 0")
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
   var buf = claude.Debug().chat_buf
-  var you = index(ChatLines(), '❯ You') + 1
-  var hdr = index(ChatLines(), '✻ Claude') + 1
+  var you = index(ChatLines(), '❯ You:') + 1
+  var hdr = index(ChatLines(), '✻ Claude:') + 1
   var Props = (lnum: number, type: string): list<dict<any>> =>
     filter(prop_list(lnum, {bufnr: buf}), (_, p) => p.type == type)
   assert_match('^\d\d:\d\d$', Props(you, 'claude_time')[0].text)
   assert_match('^\d\d:\d\d$', Props(hdr, 'claude_time')[0].text)
   assert_match('^  [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] writing…$', Props(hdr, 'claude_live')[0].text)
   # Your message is dimmed.
-  assert_equal(1, len(Props(you + 1, 'claude_user')))
+  assert_equal(1, len(Props(you + 2, 'claude_user')))
+  assert_equal(3, Props(you + 2, 'claude_user')[0].col)
   claude.Stop()
   assert_equal([], Props(hdr, 'claude_live'))
 enddef
@@ -261,8 +260,8 @@ def g:Test_claude_header_appears_before_first_token()
   claude.Send('SLOW please')
   # Right after sending, before any output: header with "thinking…".
   var lines = ChatLines()
-  assert_equal('✻ Claude', lines[-1])
-  var live = filter(prop_list(len(lines), {bufnr: claude.Debug().chat_buf}), (_, p) => p.type == 'claude_live')
+  assert_equal(['✻ Claude:', ''], lines[-2 :])
+  var live = filter(prop_list(len(lines) - 1, {bufnr: claude.Debug().chat_buf}), (_, p) => p.type == 'claude_live')
   assert_match('thinking…$', live[0].text)
   claude.Stop()
 enddef

@@ -9,8 +9,8 @@ unlet! b:current_syntax
 # Stray `_`/`*` in prose are common in replies; don't paint them as errors.
 silent! syntax clear markdownError
 
-syntax match claudeUser   /^❯ You$/
-syntax match claudeClaude /^✻ Claude$/
+syntax match claudeUser   /^❯ You:$/
+syntax match claudeClaude /^✻ Claude:$/
 syntax match claudeTool   /^  ● .*$/
 syntax match claudeToolErr /^    ⎿ .*$/
 syntax match claudeAttach /^  ↳ .*$/
@@ -19,7 +19,7 @@ syntax match claudeOk     /^  [✓✗■] .*$/
 syntax match claudeFooter /^  ── .*$/
 # Box tables are aligned by character count: their cells hold plain text
 # only, and each row is a single item so no Markdown rule applies inside.
-syntax match claudeTableRow /^[┌├└│].*[┐┤┘│]$/ contains=claudeTableBorder
+syntax match claudeTableRow /^\s*[┌├└│].*[┐┤┘│]$/ contains=claudeTableBorder
 syntax match claudeTableBorder /[┌┬┐├┼┤└┴┘─│]/ contained
 # Inline code in tables is highlighted with text properties (claudeTableCode).
 

@@ -5,9 +5,10 @@ vim9script
 import autoload 'claude/util.vim'
 
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-const HDR_USER = '❯ You'
-const HDR_CLAUDE = '✻ Claude'
-const HDR_PAT = '^\%(❯ You\|✻ Claude\)$'
+const HDR_USER = '❯ You:'
+const HDR_CLAUDE = '✻ Claude:'
+const HDR_PAT = '^\%(❯ You\|✻ Claude\):$'
+const INDENT = '  '         # message bodies are indented under their label
 const LIVE_LABELS = {thinking: 'thinking…', responding: 'writing…'}
 const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const MODE_LABELS = {default: 'ask before edits', acceptEdits: 'auto-accept edits',
@@ -111,6 +112,9 @@ enddef
 
 def SetupChatWin()
   setlocal wrap linebreak breakindent nonumber norelativenumber nolist nospell
+  # Wrapped list items line up with their text, not with the bullet.
+  setlocal breakindentopt=list:-1
+  &l:formatlistpat = '^\s*\%(\d\+[.)]\|[-*+]\)\s\+'
   setlocal signcolumn=no foldcolumn=0 colorcolumn= winfixwidth conceallevel=2
   setlocal foldmethod=expr foldlevel=99
   &l:foldexpr = "getline(v:lnum) =~# '" .. HDR_PAT .. "' ? '>1' : '1'"
@@ -120,6 +124,8 @@ enddef
 def SetupInputBuf()
   DetachCompletion()
   setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+  # A global 'textwidth' would hard-wrap your message while you type.
+  setlocal textwidth=0 wrapmargin=0 formatoptions-=t formatoptions-=c
   setlocal filetype=claudeinput
   silent! file claude://input
   input_buf = bufnr()
@@ -465,15 +471,16 @@ def LineCount(): number
   return getbufinfo(chat_buf)[0].linecount
 enddef
 
-# Speaker line ("❯ You" / "✻ Claude") with the time right-aligned.
+# Speaker line ("❯ You:" / "✻ Claude:") with the time right-aligned,
+# followed by a blank line.
 def Header(name: string, time: string)
   CloseText()
   if bufexists(chat_buf) && !BufEmpty()
     EnsureBlank()
   endif
-  Append([name])
+  Append([name, ''])
   if time != ''
-    prop_add(LineCount(), 0, {bufnr: chat_buf, type: 'claude_time', text: time, text_align: 'right'})
+    prop_add(LineCount() - 1, 0, {bufnr: chat_buf, type: 'claude_time', text: time, text_align: 'right'})
   endif
   last_kind = 'header'
 enddef
@@ -482,12 +489,13 @@ def RenderUser(text: string, time: string = strftime('%H:%M'))
   Header(HDR_USER, time)
   turn_header = false
   var first = LineCount() + 1
-  var lines = split(text, "\n", 1)
+  var lines = mapnew(split(text, "\n", 1), (_, l) => l == '' ? '' : INDENT .. l)
   Append(lines)
   # Your own message is dimmed, so Claude's replies stand out.
   for i in range(len(lines))
     if lines[i] != ''
-      prop_add(first + i, 1, {bufnr: chat_buf, type: 'claude_user', length: strlen(lines[i])})
+      prop_add(first + i, len(INDENT) + 1, {bufnr: chat_buf, type: 'claude_user',
+        length: strlen(lines[i]) - len(INDENT)})
     endif
   endfor
   last_kind = 'user'
@@ -564,9 +572,11 @@ def AppendText(s: string)
   BeginText()
   var parts = split(s, "\n", 1)
   Modify(() => {
-    setbufline(chat_buf, '$', getbufline(chat_buf, '$')[0] .. parts[0])
+    # Text starting on an empty line gets the body indent; blank lines stay empty.
+    var last = getbufline(chat_buf, '$')[0]
+    setbufline(chat_buf, '$', (last == '' && parts[0] != '' ? INDENT : last) .. parts[0])
     if len(parts) > 1
-      appendbufline(chat_buf, '$', parts[1 :])
+      appendbufline(chat_buf, '$', mapnew(parts[1 :], (_, p) => p == '' ? '' : INDENT .. p))
     endif
   })
   # A table just ended (a finished non-table line follows table rows):
@@ -584,7 +594,7 @@ def EnsureClaudeHeader(time: string = strftime('%H:%M'))
   if !turn_header
     Header(HDR_CLAUDE, time)
     turn_header = true
-    live_lnum = LineCount()
+    live_lnum = LineCount() - 1
     UpdateLive()
   endif
 enddef
@@ -1174,7 +1184,9 @@ def YankCodeBlock()
     Warn('cursor is not inside a code block')
     return
   endif
-  var text = getline(r[0], r[1])
+  # Drop the transcript's body indent (that of the opening fence).
+  var indent = matchstr(getline(r[0] - 1), '^\s*')
+  var text = mapnew(getline(r[0], r[1]), (_, l) => l[: len(indent) - 1] == indent ? l[len(indent) :] : l)
   setreg('"', text, 'l')
   if has('clipboard')
     silent! setreg('+', text, 'l')

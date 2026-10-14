@@ -104,3 +104,13 @@ def g:Test_panel_takes_half_the_screen_and_follows_resize()
   doautocmd VimResized
   assert_true(abs(winwidth(chat) - &columns / 2) <= 1, 'width ' .. winwidth(chat))
 enddef
+
+def g:Test_input_does_not_hard_wrap_with_global_textwidth()
+  set textwidth=20
+  claude.NewChat()
+  claude.Open()
+  assert_equal(0, &l:textwidth)
+  feedkeys("a" .. repeat('word ', 10) .. "\<Esc>", 'xt')
+  assert_equal(1, line('$'))
+  set textwidth&
+enddef

@@ -533,8 +533,11 @@ export def FormatTables(lines: list<string>, maxwidth: number): list<list<any>>
       while j < len(lines) && lines[j] =~ '^\s*|'
         j += 1
       endwhile
-      var t = RenderTable(lines[i : j - 1], maxwidth)
-      add(out, [i, j - 1, t.lines, t.code])
+      # Keep the table at the indent of its first row.
+      var indent = matchstr(l, '^\s*')
+      var t = RenderTable(lines[i : j - 1], maxwidth - strwidth(indent))
+      add(out, [i, j - 1, mapnew(t.lines, (_, x) => indent .. x),
+        mapnew(t.code, (_, c) => [c[0], c[1] + len(indent), c[2]])])
       i = j
       continue
     endif
