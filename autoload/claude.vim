@@ -108,6 +108,8 @@ def SetupChatBuf()
   nnoremap <buffer><silent> ]] <ScriptCmd>search(HDR_PAT, 'W')<CR>
   nnoremap <buffer><silent> [[ <ScriptCmd>search(HDR_PAT, 'bW')<CR>
   nnoremap <buffer><silent> gy <ScriptCmd>YankCodeBlock()<CR>
+  # Select part of a reply and press Enter to ask about it.
+  xnoremap <buffer><silent> <CR> <Esc><ScriptCmd>QuoteSelection()<CR>
 
   augroup claude_chat
     autocmd! * <buffer>
@@ -126,6 +128,8 @@ def SetupChatWin()
   setlocal foldmethod=expr foldlevel=99
   &l:foldexpr = "getline(v:lnum) =~# '" .. HDR_PAT .. "' ? '>1' : '1'"
   &l:statusline = '%!claude#StatusLine()'
+  # No "@" filler when the last line doesn't fit (e.g. while the input grows).
+  &l:fillchars = &g:fillchars .. ',lastline: '
   if !empty(fence_pending)
     var tags = fence_pending
     fence_pending = []
@@ -1124,6 +1128,15 @@ export def Explain(l1: number, l2: number)
 enddef
 
 export def AddToInput(l1: number, l2: number)
+  if bufnr() == chat_buf
+    # From the transcript: quote the text instead of mentioning claude://chat.
+    if l1 == line("'<") && l2 == line("'>")
+      QuoteSelection()
+    else
+      QuoteText(getline(l1, l2), l1, l2)
+    endif
+    return
+  endif
   var path = expand('%:p')
   if path == ''
     # Unnamed buffer: there is no path to mention, so paste the code itself.
@@ -1136,6 +1149,42 @@ export def AddToInput(l1: number, l2: number)
   Open()
   var last = getbufline(input_buf, '$')[0]
   setbufline(input_buf, '$', last .. (last =~ '\S$' ? ' ' : '') .. mention .. ' ')
+  normal! G$
+  startinsert!
+enddef
+
+# Put the visual selection made in the transcript into the input box, as a
+# quote (or a fenced block when it is code), ready for a question.
+export def QuoteSelection()
+  var p1 = getpos("'<")
+  var p2 = getpos("'>")
+  var lines = getregion(p1, p2, {type: visualmode()})
+  # Drop the transcript's body indent, except where the selection started
+  # mid-line (that text has no indent to drop).
+  for i in range(len(lines))
+    if (i > 0 || p1[2] <= len(INDENT) + 1 || visualmode() == 'V') && lines[i][: len(INDENT) - 1] == INDENT
+      lines[i] = lines[i][len(INDENT) :]
+    endif
+  endfor
+  QuoteText(lines, p1[1], p2[1])
+enddef
+
+def QuoteText(lines: list<string>, l1: number, l2: number)
+  var fence = util.FenceAround(getbufline(chat_buf, 1, '$'), l1, l2)
+  var quote = util.QuoteText(lines, get(fence, 'lang', ''), !empty(fence))
+  if empty(quote)
+    return
+  endif
+  FocusInput(false)
+  # Keep what is already typed, separated by one blank line.
+  var cur = getbufline(input_buf, 1, '$')
+  while !empty(cur) && cur[-1] =~ '^\s*$'
+    remove(cur, -1)
+  endwhile
+  var text = (empty(cur) ? [] : cur + ['']) + quote
+  deletebufline(input_buf, 1, '$')
+  setbufline(input_buf, 1, text)
+  RefreshInput()
   normal! G$
   startinsert!
 enddef

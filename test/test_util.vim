@@ -240,3 +240,18 @@ def g:Test_Bar_keep_left_shortens_right_first()
   assert_match('^  ctrl-c to stop  …', b)
   assert_match('ask before edits $', b)
 enddef
+
+def g:Test_QuoteText()
+  assert_equal(['> Hello **x**', '>', '> next', ''],
+    util.QuoteText(['', '  Hello **x**', '', '  next', '']))
+  assert_equal(['```js', 'const a = 1;', '  if (a) {}', '```', ''],
+    util.QuoteText(['  const a = 1;', '    if (a) {}'], 'js', true))
+  assert_equal([], util.QuoteText(['', '  ']))
+enddef
+
+def g:Test_FenceAround()
+  var lines = ['  text', '  ```py', '  a = 1', '  b = 2', '  ```', '  more']
+  assert_equal({lang: 'py'}, util.FenceAround(lines, 3, 4))
+  assert_equal({}, util.FenceAround(lines, 1, 3))
+  assert_equal({}, util.FenceAround(lines, 6, 6))
+enddef

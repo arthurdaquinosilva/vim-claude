@@ -610,3 +610,37 @@ enddef
 export def FenceStart(tag: string): string
   return '\c^\s*```\+\s*\V' .. escape(tag, '\') .. '\m\%(\s.*\)\=$'
 enddef
+
+# ---------------------------------------------------------------- quoting
+
+# Turn lines selected in the transcript into text for the input box: code
+# (lang != '') as a fenced block, anything else as a Markdown quote. The
+# transcript's indentation is removed. Ends with an empty line to type on.
+export def QuoteText(lines: list<string>, lang: string = '', fenced: bool = false): list<string>
+  var body = copy(lines)
+  while !empty(body) && body[0] =~ '^\s*$'
+    remove(body, 0)
+  endwhile
+  while !empty(body) && body[-1] =~ '^\s*$'
+    remove(body, -1)
+  endwhile
+  if empty(body)
+    return []
+  endif
+  var indents = mapnew(filter(copy(body), (_, l) => l =~ '\S'), (_, l) => strlen(matchstr(l, '^\s*')))
+  var cut = min(indents)
+  body = mapnew(body, (_, l) => strpart(l, cut))
+  if fenced
+    return CodeBlock(body, lang) + ['']
+  endif
+  return mapnew(body, (_, l) => l == '' ? '>' : '> ' .. l) + ['']
+enddef
+
+# The fenced code block (with its language) containing lines l1..l2, or {}.
+export def FenceAround(lines: list<string>, l1: number, l2: number): dict<any>
+  var r = CodeBlockAt(lines, l1)
+  if empty(r) || l1 < r[0] || l2 > r[1]
+    return {}
+  endif
+  return {lang: matchstr(lines[r[0] - 2], '^\s*```\+\s*\zs[^ \t{`]*')}
+enddef

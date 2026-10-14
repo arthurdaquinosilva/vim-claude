@@ -50,6 +50,8 @@ Transcript:
   i a o <CR>     jump to the input box
   ]] [[          next / previous message
   gy             yank the code block under the cursor (also to "+)
+  {Visual}<CR>   put the selected part of a reply in the input box (as a
+                 quote, or a code block if it is code) to ask about it
   <C-c>          stop Claude
   q              close the panel
 

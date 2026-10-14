@@ -58,8 +58,9 @@ Plug 'arthurdaquinosilva/vim-claude'
 | `<Leader>cm` / `cp`  | choose model / permission mode            |
 
 In the input box, `Enter` sends, `Ctrl-J` inserts a newline and `Ctrl-C` stops.
-In the transcript, `]]`/`[[` jump between messages, `gy` yanks a code block and
-`q` closes the panel.
+In the transcript, `]]`/`[[` jump between messages, `gy` yanks a code block,
+selecting part of a reply and pressing `Enter` quotes it into the input box so
+you can ask about it, and `q` closes the panel.
 
 ```vim
 let g:claude_model = 'sonnet'               " default: the CLI default

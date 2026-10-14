@@ -310,3 +310,31 @@ def g:Test_code_fences_work_inside_wrapping_markdown_regions()
   var names = join(synstack(lnum, 3)->map((_, id) => synIDattr(id, 'name')), ' ')
   assert_match('claudeFence\d\+ .*javaScript', names)
 enddef
+
+def g:Test_quote_selection_from_reply_into_input()
+  Reset()
+  claude.Open()
+  claude.Send('CODE please')
+  g:WaitFor('!claude#Busy()')
+  var input = claude.Debug().input_buf
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  # Lines of the js block -> fenced js, indent removed.
+  var l1 = index(ChatLines(), '  const x = 1;') + 1
+  execute "normal! " .. l1 .. "GVj\<Esc>"
+  claude.QuoteSelection()
+  assert_equal(['```js', 'const x = 1;', 'function f() { return x; }', '```', ''], getbufline(input, 1, '$'))
+  assert_equal(input, bufnr())
+  assert_equal(line('$'), line('.'))
+
+  # Part of a prose line (charwise) -> a quote, appended after a blank line.
+  stopinsert
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  var lk = index(ChatLines(), '  Look:') + 1
+  execute "normal! " .. lk .. "G3|ve\<Esc>"
+  claude.QuoteSelection()
+  assert_equal(['> Look', ''], getbufline(input, 6, '$'))
+
+  # The visual <CR> mapping is set in the transcript.
+  win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
+  assert_match('QuoteSelection', maparg('<CR>', 'x'))
+enddef
