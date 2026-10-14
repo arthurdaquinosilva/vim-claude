@@ -196,7 +196,7 @@ def g:Test_markdown_tables_are_formatted()
     '┌────────┬──────────┐',
     '│ Action │ Effect   │',
     '├────────┼──────────┤',
-    '│ `add`  │ Adds one │',
+    '│ add    │ Adds one │',
     '└────────┴──────────┘',
   ], lines[at : at + 5])
   assert_equal('', lines[at + 6])
@@ -214,13 +214,26 @@ def g:Test_table_rows_are_not_concealed()
   g:WaitFor('!claude#Busy()')
   win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
   syntax region markdownCode matchgroup=markdownCodeDelimiter start="`" end="`" concealends
-  var lnum = index(ChatLines(), '│ `add`  │ Adds one │') + 1
+  var lnum = index(ChatLines(), '│ add    │ Adds one │') + 1
   assert_true(lnum > 0)
   var concealed = 0
   for col in range(1, strlen(getline(lnum)))
     concealed += synconcealed(lnum, col)[0]
   endfor
   assert_equal(0, concealed)
-  assert_equal(['claudeTableRow', 'claudeTableCode'],
-    synstack(lnum, 6)->map((_, id) => synIDattr(id, 'name')))
+  assert_equal(['claudeTableRow'], synstack(lnum, 6)->map((_, id) => synIDattr(id, 'name')))
+  # Inline code keeps its color through a text property instead.
+  var p = prop_list(lnum)
+  assert_equal(1, len(p))
+  assert_equal(['claude_code', 'add'], [p[0].type, strpart(getline(lnum), p[0].col - 1, p[0].length)])
+enddef
+
+def g:Test_table_code_highlight_has_a_color()
+  highlight clear markdownCode
+  highlight clear mkdCode
+  claude.LinkCodeHighlight()
+  assert_equal('String', hlget('claudeTableCode')[0].linksto)
+  highlight claudeTableCode ctermfg=1
+  claude.LinkCodeHighlight()
+  assert_equal('claudeTableCode', synIDattr(synIDtrans(hlID('claudeTableCode')), 'name'))
 enddef

@@ -17,12 +17,11 @@ syntax match claudeAttach /^  ↳ .*$/
 syntax match claudeError  /^  [✖!] .*$/
 syntax match claudeOk     /^  [✓✗■] .*$/
 syntax match claudeFooter /^  ── .*$/
-# Box tables are aligned by character count, so nothing in them may be
-# concealed: the row is one top-level item and only our own (non-concealing)
-# items are allowed inside.
-syntax match claudeTableRow /^[┌├└│].*[┐┤┘│]$/ contains=claudeTableBorder,claudeTableCode
+# Box tables are aligned by character count: their cells hold plain text
+# only, and each row is a single item so no Markdown rule applies inside.
+syntax match claudeTableRow /^[┌├└│].*[┐┤┘│]$/ contains=claudeTableBorder
 syntax match claudeTableBorder /[┌┬┐├┼┤└┴┘─│]/ contained
-syntax match claudeTableCode /`[^`]\+`/ contained
+# Inline code in tables is highlighted with text properties (claudeTableCode).
 
 highlight default link claudeUser    Statement
 highlight default link claudeClaude  Special
@@ -33,6 +32,8 @@ highlight default link claudeError   ErrorMsg
 highlight default link claudeOk      MoreMsg
 highlight default link claudeFooter  NonText
 highlight default link claudeTableBorder Comment
-execute 'highlight default link claudeTableCode ' .. (hlexists('mkdCode') ? 'mkdCode' : 'markdownCode')
+
+# Markdown is loaded now, so its code group's color can be picked up.
+claude#LinkCodeHighlight()
 
 b:current_syntax = 'claudechat'

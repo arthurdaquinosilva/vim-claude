@@ -86,6 +86,7 @@ def SetupChatBuf()
   setlocal filetype=claudechat
   silent! file claude://chat
   chat_buf = bufnr()
+  prop_type_add('claude_code', {bufnr: chat_buf, highlight: 'claudeTableCode'})
 
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
@@ -180,10 +181,30 @@ def DefineHighlights()
   sign_define('ClaudePrompt', {text: '❯', texthl: 'ClaudePromptSign'})
   sign_define('ClaudeCont', {text: ' ', texthl: 'ClaudeInputSign'})
   highlight default link ClaudeRule Comment
+  LinkCodeHighlight()
   highlight default link ClaudeTitle Title
   highlight default link ClaudeBusy Special
   highlight default link ClaudeChip Directory
   highlight default link ClaudePlaceholder Comment
+enddef
+
+# Inline code in tables: use whichever Markdown code group has a color in
+# this colorscheme (they differ between Markdown syntaxes), else String.
+export def LinkCodeHighlight()
+  var group = 'String'
+  for g in ['mkdCode', 'markdownCode']
+    var h = hlget(g, true)
+    if !empty(h) && (has_key(h[0], 'ctermfg') || has_key(h[0], 'guifg'))
+      group = g
+      break
+    endif
+  endfor
+  # Respect a user-defined color; otherwise (re)link to the found group.
+  var cur = hlget('claudeTableCode')
+  var custom = !empty(cur) && !has_key(cur[0], 'linksto') && !get(cur[0], 'cleared', false)
+  if !custom
+    execute 'highlight! link claudeTableCode ' .. group
+  endif
 enddef
 
 DefineHighlights()
@@ -240,7 +261,7 @@ def UnderChat(input_win: number): bool
   return false
 enddef
 
-export def InputStatusLine(): string
+export def InputStatusLine(winid: number = 0): string
   var lefts = [
     [['enter', 'ClaudeTitle'], [' send · ', ''], ['ctrl-j', 'ClaudeTitle'], [' newline · ', ''],
      ['@', 'ClaudeTitle'], [' file · ', ''], ['ctrl-p', 'ClaudeTitle'], [' history', '']],
@@ -255,12 +276,35 @@ export def InputStatusLine(): string
   if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
     right = [[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]
   endif
-  return util.Rule(lefts, right, winwidth(g:statusline_winid), 'ClaudeRule')
+  return util.Rule(lefts, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
 enddef
+
+# g:claude_width: columns (> 1) or a fraction of the screen (<= 1); default half.
+def PanelWidth(): number
+  var w = Opt('width', 0.5)
+  return type(w) == v:t_float || w <= 1 ? float2nr(&columns * (w == 0 ? 0.5 : w)) : w
+enddef
+
+def OnVimResized()
+  if Opt('position', 'right') == 'bottom'
+    return
+  endif
+  for w in ChatWins() + InputWins()
+    if win_id2tabwin(w)[0] == tabpagenr()
+      win_execute(w, 'vertical resize ' .. PanelWidth())
+      break
+    endif
+  endfor
+enddef
+
+augroup claude_resize
+  autocmd!
+  autocmd VimResized * OnVimResized()
+augroup END
 
 def CreatePanel()
   var pos = Opt('position', 'right')
-  var width = Opt('width', max([50, &columns * 2 / 5]))
+  var width = PanelWidth()
   if pos == 'left'
     topleft vsplit
     execute 'vertical resize ' .. width
@@ -462,6 +506,9 @@ def FormatTablesFrom(start: number)
     for r in reverse(reps)
       deletebufline(chat_buf, start + r[0], start + r[1])
       appendbufline(chat_buf, start + r[0] - 1, r[2])
+      for [li, col, len] in r[3]
+        prop_add(start + r[0] + li, col, {bufnr: chat_buf, type: 'claude_code', length: len})
+      endfor
     endfor
   })
 enddef
@@ -506,7 +553,7 @@ enddef
 
 # ---------------------------------------------------------------- status
 
-export def StatusLine(): string
+export def StatusLine(winid: number = 0): string
   var title = [['✻ Claude', 'ClaudeTitle']]
   var lefts = [title]
   if busy
@@ -515,7 +562,7 @@ export def StatusLine(): string
   endif
   var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
   var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
-  return util.Rule(lefts, right, winwidth(g:statusline_winid), 'ClaudeRule')
+  return util.Rule(lefts, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule')
 enddef
 
 def SetBusy(on: bool, what: string = 'thinking')

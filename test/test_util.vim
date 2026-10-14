@@ -120,14 +120,14 @@ enddef
 def g:Test_Rule_fills_exact_width_and_degrades()
   var Plain = (s: string): string => substitute(s, '%#[^#]*#', '', 'g')
   var s = Plain(util.Rule([[['Claude', 'T']]], [['haiku', '']], 30, 'R'))
-  assert_equal(30, strdisplaywidth(s))
+  assert_equal(30, strwidth(s))
   assert_match('^── Claude ─\+ haiku ──$', s)
   # Too narrow for the long left: falls back to the short one.
   s = Plain(util.Rule([[['a very long hint text here', '']], [['short', '']]], [['x', '']], 20, 'R'))
   assert_match('^── short ─\+ x ──$', s)
-  assert_equal(20, strdisplaywidth(s))
+  assert_equal(20, strwidth(s))
   # Too narrow for anything: right side dropped, then plain rule.
-  assert_equal(12, strdisplaywidth(Plain(util.Rule([[['abc', '']]], [['wide right', '']], 12, 'R'))))
+  assert_equal(12, strwidth(Plain(util.Rule([[['abc', '']]], [['wide right', '']], 12, 'R'))))
   assert_equal('───', Plain(util.Rule([[['abcdef', '']]], [], 3, 'R')))
   assert_match('100%%', util.Rule([[['100%', '']]], [], 20, 'R'))
   # Prefers shorter hints with the right side over long hints without it.
@@ -155,21 +155,21 @@ enddef
 def g:Test_FormatTable_aligned()
   var t = util.FormatTable(['| Action | Effect |', '|---|--:|', '| `add(x)` | Adds one |', '| set | 2 |'], 80)
   assert_equal([
-    '┌──────────┬──────────┐',
-    '│ Action   │   Effect │',
-    '├──────────┼──────────┤',
-    '│ `add(x)` │ Adds one │',
-    '│ set      │        2 │',
-    '└──────────┴──────────┘'], t)
+    '┌────────┬──────────┐',
+    '│ Action │   Effect │',
+    '├────────┼──────────┤',
+    '│ add(x) │ Adds one │',
+    '│ set    │        2 │',
+    '└────────┴──────────┘'], t)
 enddef
 
 def g:Test_FormatTable_wraps_to_width()
   var t = util.FormatTable(['| Name | Description |', '|---|---|',
     '| setQuantity | Updates one item quantity at the given index |', '| a | b |'], 30)
   for l in t
-    assert_true(strdisplaywidth(l) <= 30, l)
+    assert_true(strwidth(l) <= 30, l)
   endfor
-  assert_equal(strdisplaywidth(t[0]), strdisplaywidth(t[-1]))
+  assert_equal(strwidth(t[0]), strwidth(t[-1]))
   assert_match('│ setQuantity │ Updates one  │\n│             │ item         │', join(t, "\n"))
   # Wrapped rows get a separator between them (plus the header one).
   assert_equal(2, len(filter(copy(t), (_, l) => l =~ '^├')))
@@ -188,4 +188,25 @@ def g:Test_FormatTable_strips_bold_markers()
   var t = util.FormatTable(['| **Name** | __Kind__ |', '|---|---|', '| **a** | b |'], 80)
   assert_equal('│ Name │ Kind │', t[1])
   assert_equal('│ a    │ b    │', t[3])
+enddef
+
+def g:Test_ParseCell_strips_markup_and_marks_code()
+  var [plain, mask] = util.ParseCell('Uses `a b` and **c** [d](http://x)')
+  assert_equal('Uses a b and c d', plain)
+  assert_equal('00000111000000000', join(mapnew(mask, (_, m) => m ? '1' : '0'), '') .. '0')
+  # An unmatched backtick stays literal.
+  assert_equal(['x y', 'it`s'], [util.ParseCell('``x`` y')[0], util.ParseCell('it`s')[0]])
+enddef
+
+def g:Test_RenderTable_code_ranges_survive_wrapping()
+  var t = util.RenderTable(['| A | B |', '|---|---|', '| `setQuantity({index, quantity})` | Updates `qty` now |'], 34)
+  var got: list<string> = []
+  for [li, col, len] in t.code
+    add(got, strpart(t.lines[li], col - 1, len))
+  endfor
+  assert_equal(['setQuantity({', 'qty', 'index,', 'quantity})'], got)
+  for l in t.lines
+    assert_true(strwidth(l) <= 34, l)
+    assert_equal(strwidth(t.lines[0]), strwidth(l))
+  endfor
 enddef

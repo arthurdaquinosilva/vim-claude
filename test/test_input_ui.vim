@@ -52,22 +52,19 @@ def g:Test_busy_placeholder_and_bars()
   g:WaitFor('claude#Busy()')
   assert_match('working', Placeholder(buf))
 
-  g:statusline_winid = input_win
-  var bar = Plain(claude.InputStatusLine())
-  assert_equal(winwidth(input_win), strdisplaywidth(bar))
+  var bar = Plain(claude.InputStatusLine(input_win))
+  assert_equal(winwidth(input_win), strwidth(bar), bar)
   assert_match('ctrl-c stop', bar)
 
   var chat_win = win_findbuf(claude.Debug().chat_buf)[0]
-  g:statusline_winid = chat_win
-  bar = Plain(claude.StatusLine())
-  assert_equal(winwidth(chat_win), strdisplaywidth(bar))
+  bar = Plain(claude.StatusLine(chat_win))
+  assert_equal(winwidth(chat_win), strwidth(bar))
   assert_match('^── ✻ Claude [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ', bar)
   assert_match('ask before edits ──$', bar)
 
   claude.Stop()
   assert_match('Ask Claude', Placeholder(buf))
-  g:statusline_winid = input_win
-  assert_match('enter send', Plain(claude.InputStatusLine()))
+  assert_match('enter send', Plain(claude.InputStatusLine(input_win)))
 enddef
 
 def g:Test_panel_windows_have_no_colorcolumn()
@@ -90,4 +87,20 @@ def g:Test_quitting_chat_window_keeps_editor_height()
   g:WaitFor('winnr("$") == 1')
   assert_equal(editor, win_getid())
   assert_equal(full, winheight(0))
+enddef
+
+def g:Test_panel_takes_half_the_screen_and_follows_resize()
+  claude.NewChat()
+  silent! only!
+  claude.Open()
+  var chat = win_findbuf(claude.Debug().chat_buf)[0]
+  assert_true(abs(winwidth(chat) - &columns / 2) <= 1, 'width ' .. winwidth(chat))
+  claude.Close()
+  g:claude_width = 0.3
+  claude.Open()
+  chat = win_findbuf(claude.Debug().chat_buf)[0]
+  assert_true(abs(winwidth(chat) - float2nr(&columns * 0.3)) <= 1, 'width ' .. winwidth(chat))
+  unlet g:claude_width
+  doautocmd VimResized
+  assert_true(abs(winwidth(chat) - &columns / 2) <= 1, 'width ' .. winwidth(chat))
 enddef

@@ -314,13 +314,14 @@ enddef
 # fit beside it. Segments are [text, highlight group]; '' = rule color.
 export def Rule(lefts: list<list<list<string>>>, right: list<list<string>>, width: number, rule_hl: string): string
   var Len = (segs: list<list<string>>): number =>
-    reduce(segs, (acc, s) => acc + strdisplaywidth(s[0]), 0)
+    reduce(segs, (acc, s) => acc + strwidth(s[0]), 0)
   var Draw = (segs: list<list<string>>): string =>
     join(mapnew(segs, (_, s) => '%#' .. (s[1] == '' ? rule_hl : s[1]) .. '#'
       .. substitute(s[0], '%', '%%', 'g')), '')
-  # Keep the right side as long as possible, shortening the left first.
+  # Keep the right side as long as possible, shortening the left first,
+  # but never drop the left entirely to make room for the right.
   for rr in [right, []]
-    for left in lefts + [[]]
+    for left in lefts + (empty(rr) ? [[]] : [])
       # '── ' left ' ' fill [' ' right ' '] '──'
       var used = 3 + Len(left) + 1 + (empty(rr) ? 0 : Len(rr) + 2) + 2
       if used < width
@@ -336,79 +337,111 @@ enddef
 # `prefix` cells-wide margin on every line.
 export def DisplayRows(lines: list<string>, width: number, prefix: number): number
   var w = max([width - prefix, 1])
-  return reduce(lines, (acc, l) => acc + max([1, (strdisplaywidth(l) + w - 1) / w]), 0)
+  return reduce(lines, (acc, l) => acc + max([1, (strwidth(l) + w - 1) / w]), 0)
 enddef
 
 # ---------------------------------------------------------------- tables
+#
+# Tables are aligned by counting characters, so their cells must not contain
+# Markdown markup that a syntax file might conceal (`code`, **bold**, links).
+# Cells are reduced to plain text; code spans are returned as highlight
+# ranges for the caller to apply as text properties.
 
 const TABLE_SEP = '^\s*|\=\s*:\=-\+:\=\s*\%(|\s*:\=-\+:\=\s*\)*|\=\s*$'
 
-# Split a "| a | b |" row into trimmed cells (honours \| escapes).
+# Split a "| a | b |" row into trimmed raw cells (honours \| escapes).
 export def TableCells(line: string): list<string>
   var s = trim(line)
   s = substitute(s, '^|', '', '')
   s = substitute(s, '\\\@<!|$', '', '')
-  var cells = split(s, '\\\@<!|', 1)
-  # Bold markers would be concealed (or shown) unpredictably; drop them.
-  return mapnew(cells, (_, c) => trim(substitute(c, '\\|', '|', 'g')
-    ->substitute('\*\*\(.\{-1,}\)\*\*', '\1', 'g')
-    ->substitute('\<__\(.\{-1,}\)__\>', '\1', 'g')))
+  return mapnew(split(s, '\\\@<!|', 1), (_, c) => trim(substitute(c, '\\|', '|', 'g')))
 enddef
 
-# Word-wrap `text` to `width` display cells (hard-breaks long words).
-export def WrapText(text: string, width: number): list<string>
-  var out: list<string> = []
-  var cur = ''
-  for w in split(text, ' ')
-    var word = w
-    while strdisplaywidth(word) > width
-      if cur != ''
-        add(out, cur)
-        cur = ''
-      endif
-      var n = width
-      while strdisplaywidth(strcharpart(word, 0, n)) > width
-        n -= 1
-      endwhile
-      add(out, strcharpart(word, 0, n))
-      word = strcharpart(word, n)
-    endwhile
-    if cur == ''
-      cur = word
-    elseif strdisplaywidth(cur) + 1 + strdisplaywidth(word) <= width
-      cur ..= ' ' .. word
-    else
-      add(out, cur)
-      cur = word
+# Raw cell -> [plain text, code mask (one bool per character)].
+export def ParseCell(raw: string): list<any>
+  var s = substitute(raw, '\[\([^]]*\)\](\([^)]*\))', '\1', 'g')   # [text](url)
+  s = substitute(s, '\*\*\(.\{-1,}\)\*\*', '\1', 'g')                # **bold**
+  s = substitute(s, '\<__\(.\{-1,}\)__\>', '\1', 'g')                # __bold__
+  var ticks = count(s, '`')
+  var plain = ''
+  var mask: list<bool> = []
+  var in_code = false
+  var seen = 0
+  for ch in split(s, '\zs')
+    if ch == '`' && (in_code || seen < ticks - ticks % 2)
+      seen += 1
+      in_code = !in_code
+      continue
     endif
+    plain ..= ch
+    add(mask, in_code)
   endfor
-  if cur != '' || empty(out)
-    add(out, cur)
-  endif
-  return out
+  return [plain, mask]
 enddef
 
-def Pad(text: string, width: number, align: string): string
-  var gap = width - strdisplaywidth(text)
-  if align == 'right'
-    return repeat(' ', gap) .. text
-  elseif align == 'center'
-    return repeat(' ', gap / 2) .. text .. repeat(' ', gap - gap / 2)
-  endif
-  return text .. repeat(' ', gap)
+# Word-wrap `text` into [start, end) character ranges at most `width` display
+# cells wide (long words are hard-broken).
+export def WrapRanges(text: string, width: number): list<list<number>>
+  var chars = split(text, '\zs')
+  var n = len(chars)
+  var out: list<list<number>> = []
+  var i = 0
+  while i < n
+    while i < n && chars[i] == ' '
+      i += 1
+    endwhile
+    if i >= n
+      break
+    endif
+    var j = i
+    var w = 0
+    var last_space = -1
+    while j < n && w + strwidth(chars[j]) <= width
+      if chars[j] == ' '
+        last_space = j
+      endif
+      w += strwidth(chars[j])
+      j += 1
+    endwhile
+    if j >= n || chars[j] == ' '
+      add(out, [i, j])
+      i = j
+    elseif last_space > i
+      add(out, [i, last_space])
+      i = last_space + 1
+    else
+      add(out, [i, max([j, i + 1])])
+      i = max([j, i + 1])
+    endif
+  endwhile
+  for r in out
+    while r[1] > r[0] && chars[r[1] - 1] == ' '
+      r[1] -= 1
+    endwhile
+  endfor
+  return empty(out) ? [[0, 0]] : out
 enddef
 
-# Render markdown table lines (header, separator, rows) as a box-drawn
-# table at most `maxwidth` cells wide.
-export def FormatTable(lines: list<string>, maxwidth: number): list<string>
-  var rows = mapnew(lines, (i, l) => i == 1 ? [] : TableCells(l))
+export def WrapText(text: string, width: number): list<string>
+  return mapnew(WrapRanges(text, width), (_, r) => strcharpart(text, r[0], r[1] - r[0]))
+enddef
+
+def PadLeft(width: number, textw: number, align: string): number
+  var gap = width - textw
+  return align == 'right' ? gap : align == 'center' ? gap / 2 : 0
+enddef
+
+# Render markdown table lines (header, separator, rows) as a box-drawn table
+# at most `maxwidth` cells wide. Returns {lines, code} where code is a list
+# of [line index, byte column (1-based), byte length] ranges of inline code.
+export def RenderTable(lines: list<string>, maxwidth: number): dict<any>
   var aligns = mapnew(TableCells(lines[1]), (_, c) =>
     c =~ '^:.*:$' ? 'center' : c =~ ':$' ? 'right' : 'left')
-  remove(rows, 1)
+  var rows = mapnew(lines[0 : 0] + lines[2 :], (_, l) => mapnew(TableCells(l), (_, c) => ParseCell(c)))
   var ncol = max(mapnew(rows, (_, r) => len(r)))
   for r in rows
     while len(r) < ncol
-      add(r, '')
+      add(r, ['', []])
     endwhile
   endfor
   while len(aligns) < ncol
@@ -416,7 +449,7 @@ export def FormatTable(lines: list<string>, maxwidth: number): list<string>
   endwhile
 
   var widths = mapnew(range(ncol), (_, c) =>
-    max([1] + mapnew(rows, (_, r) => strdisplaywidth(r[c]))))
+    max([1] + mapnew(rows, (_, r) => strwidth(r[c][0]))))
   # Borders take 3 cells per column plus 1; shrink the widest column until
   # the table fits (but keep every column at least 6 wide).
   var budget = maxwidth - (3 * ncol + 1)
@@ -431,31 +464,61 @@ export def FormatTable(lines: list<string>, maxwidth: number): list<string>
   var Border = (l: string, m: string, r: string): string =>
     l .. join(mapnew(widths, (_, w) => repeat('─', w + 2)), m) .. r
   var out = [Border('┌', '┬', '┐')]
+  var code: list<list<number>> = []
+  var bodies: list<list<string>> = []
   var wrapped = false
-  var body: list<list<string>> = []
-  for r in rows
-    var cells = mapnew(range(ncol), (_, c) => WrapText(r[c], widths[c]))
-    var height = max(mapnew(cells, (_, c) => len(c)))
+  for row in rows
+    var wraps = mapnew(range(ncol), (_, c) => WrapRanges(row[c][0], widths[c]))
+    var height = max(mapnew(wraps, (_, w) => len(w)))
     wrapped = wrapped || height > 1
-    var lines_out: list<string> = []
+    var block: list<string> = []
     for i in range(height)
-      lines_out->add('│' .. join(mapnew(range(ncol), (_, c) =>
-        ' ' .. Pad(get(cells[c], i, ''), widths[c], aligns[c]) .. ' '), '│') .. '│')
+      var line = '│'
+      for c in range(ncol)
+        var rng = get(wraps[c], i, [0, 0])
+        var text = strcharpart(row[c][0], rng[0], rng[1] - rng[0])
+        var pad = PadLeft(widths[c], strwidth(text), aligns[c])
+        var text_col = strlen(line) + 1 + pad + 1   # 1-based byte column
+        # Code ranges within this piece of the cell.
+        var k = rng[0]
+        while k < rng[1]
+          if row[c][1][k]
+            var e = k
+            while e < rng[1] && row[c][1][e]
+              e += 1
+            endwhile
+            add(code, [len(out) + len(block),
+              text_col + strlen(strcharpart(text, 0, k - rng[0])),
+              strlen(strcharpart(text, k - rng[0], e - k))])
+            k = e
+          else
+            k += 1
+          endif
+        endwhile
+        line ..= ' ' .. repeat(' ', pad) .. text
+          .. repeat(' ', widths[c] - pad - strwidth(text)) .. ' │'
+      endfor
+      add(block, line)
     endfor
-    add(body, lines_out)
-  endfor
-  for i in range(len(body))
-    out += body[i]
-    if i == 0 || (wrapped && i < len(body) - 1)
+    add(bodies, block)
+    out += block
+    if len(bodies) == 1 || (wrapped && len(bodies) < len(rows))
       add(out, Border('├', '┼', '┤'))
     endif
   endfor
+  if out[-1] =~ '^├'
+    remove(out, -1)
+  endif
   add(out, Border('└', '┴', '┘'))
-  return out
+  return {lines: out, code: code}
+enddef
+
+export def FormatTable(lines: list<string>, maxwidth: number): list<string>
+  return RenderTable(lines, maxwidth).lines
 enddef
 
 # Find markdown tables in `lines` (outside fenced code) and return
-# replacements [[first, last, new_lines], ...] with 0-based indexes.
+# replacements [[first, last, new_lines, code_ranges], ...] (0-based indexes).
 export def FormatTables(lines: list<string>, maxwidth: number): list<list<any>>
   var out: list<list<any>> = []
   var fence = ''
@@ -470,7 +533,8 @@ export def FormatTables(lines: list<string>, maxwidth: number): list<list<any>>
       while j < len(lines) && lines[j] =~ '^\s*|'
         j += 1
       endwhile
-      add(out, [i, j - 1, FormatTable(lines[i : j - 1], maxwidth)])
+      var t = RenderTable(lines[i : j - 1], maxwidth)
+      add(out, [i, j - 1, t.lines, t.code])
       i = j
       continue
     endif

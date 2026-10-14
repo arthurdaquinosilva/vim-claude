@@ -152,7 +152,9 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_edit_model*       Model for |:ClaudeEdit|.        Default: g:claude_model
 *g:claude_permission_mode*  Starting mode.                  Default: 'default'
 *g:claude_position*         'right', 'left' or 'bottom'.    Default: 'right'
-*g:claude_width*            Panel width.                    Default: 40% of 'columns'
+*g:claude_width*            Panel width: columns, or a      Default: 0.5
+                            fraction of the screen (0.5 =
+                            half; kept on resize).
 *g:claude_height*           Panel height for 'bottom'.      Default: 18
 *g:claude_input_height*     Minimum input box height; it    Default: 3
                             grows with what you type.
