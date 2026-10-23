@@ -1,4 +1,4 @@
-vim9script
+vim9script noclear
 # claude.vim — Claude Code chat panel, explain and inline edit for Vim 9.
 # See :help claude
 
