@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The status bar in a narrow panel drops the model, then the context figure,
+  and finally the `ctrl-c` hint, so what Claude is doing is never cut off.
+- README: a text capture of the real UI.
 - Robustness: the `@` file list is built in the background (git, then find,
   then glob) so a large repository no longer freezes Vim; a process exit is
   reported only after its last output was handled; a cancelled inline edit can

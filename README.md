@@ -53,6 +53,70 @@ run commands when you allow it, and keep context across messages.
 - **Input history.** `Ctrl-P` and `Ctrl-N` step through earlier messages and
   `Ctrl-R` searches them. History is kept per project between Vim sessions.
 
+## What it looks like
+
+Claude wants to edit a file; the popup shows exactly what changes:
+
+```text
+  1 def greet(name):                               |❯ You:                                         18:54
+  2     return "Hello, " + name                    |
+  3                                                |  Add a type hint and a docstring to greet in @app.
+  4                                                |  py#L1-2
+  5 def main():                                    |
+  6     print(greet("world"))                      |  ↳ attached `app.py` (lines 1-2)
+  7                                                |
+  8                                                |✻ Claude:  ⠴ waiting for you…                  18:54
+  9 if __name__ == "__main__":                     |
+ 10     main()                                     |  ● Edit app.py
+~              ╔ Edit app.py ══════════════════════════════════════════════════════════╗
+~              ║ - def greet(name):                                                    ║
+~              ║ -     return "Hello, " + name                                         ║
+~              ║ + def greet(name: str) -> str:                                        ║
+~              ║ +     """Return a greeting for the given name."""                     ║
+~              ║ +     return "Hello, " + name                                         ║
+~              ║                                                                       ║
+~              ║ [y] allow   [a] always this session   [e] accept all edits   [n] deny ║
+~              ╚═══════════════════════════════════════════════════════════════════════╝
+~                                                  |  ──────────────────────────────────────────────────
+~                                                  |❯ Claude is working… (Enter queues your message)
+~                                                  |  ──────────────────────────────────────────────────
+app.py                           1,1            All               ⠴ waiting for you… · ask before edits
+```
+
+After you allow it, the result is shown under the call, with a numbered diff:
+
+```text
+  1 def greet(name: str) -> str:                   |
+  2     """Return a greeting for the given name."""|✻ Claude:                                      18:54
+  3     return "Hello, " + name                    |
+  4                                                |  ● Edit app.py
+  5                                                |
+  6 def main():                                    |    ⎿ Updated app.py with 2 additions and 1 removal
+  7     print(greet("world"))                      |       1 - def greet(name):
+  8                                                |       1 + def greet(name: str) -> str:
+  9                                                |       2 +     """Return a greeting for the given
+ 10 if __name__ == "__main__":                     |       name."""
+ 11     main()                                     |       3       return "Hello, " + name
+~                                                  |
+~                                                  |  I updated `greet` in `app.py` with a type hint
+~                                                  |  and a docstring:
+~                                                  |
+~                                                  |  ```python
+~                                                  |  def greet(name: str) -> str:
+~                                                  |      """Return a greeting for the given name."""
+~                                                  |      return "Hello, " + name
+~                                                  |  ```
+~                                                  |
+~                                                  |  I didn't run the file or any tests.
+~                                                  |
+~                                                  |  ── 9.9s
+~                                                  |  ──────────────────────────────────────────────────
+~                                                  |  ──────────────────────────────────────────────────
+~                                                  |❯ Ask Claude…
+~                                                  |  ──────────────────────────────────────────────────
+app.py                           1,1            All   app.py:1   sonnet-5-5 · ctx 2% · ask before edits
+```
+
 ## Install
 
 Requires Vim 9.0+ with `+job +channel +timers +popupwin +textprop` (tested on

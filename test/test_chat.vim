@@ -10,6 +10,13 @@ def StopAndWait()
   g:WaitFor('!claude#Busy()')
 enddef
 
+# The input window's status line at a width where everything fits.
+def WideBar(): string
+  var win = win_findbuf(claude.Debug().input_buf)[0]
+  win_execute(win, 'vertical resize 100')
+  return claude#InputStatusLine(win)
+enddef
+
 def Reset()
   claude.NewChat()
   writefile([], $FAKE_CLAUDE_LOG)
@@ -665,6 +672,7 @@ enddef
 
 def g:Test_context_usage_shows_in_the_statusline_and_warns()
   Reset()
+  g:claude_include_context = false   # no file chip competing for the width
   claude.Open()
   claude.Send('CTX please')
   g:WaitFor('!claude#Busy()')
@@ -677,49 +685,87 @@ def g:Test_context_usage_shows_in_the_statusline_and_warns()
   unlet g:claude_show_cost
   claude.NewChat()
   assert_notmatch('ctx', claude#InputStatusLine(win_getid()))
+  unlet g:claude_include_context
+enddef
+
+def g:Test_narrow_status_bar_keeps_the_live_status_and_drops_the_model_first()
+  Reset()
+  g:claude_include_context = false
+  var cols = &columns
+  &columns = 160
+  claude.Open()
+  var win = win_findbuf(claude.Debug().input_buf)[0]
+  var Plain = (w: number): string => substitute(claude#InputStatusLine(w), '%#\w*#\|%%', '', 'g')
+  claude.Send('SLOW please')
+  g:WaitFor("claude#InputStatusLine(" .. win .. ") =~ 'writing'")
+  win_execute(win, 'vertical resize 100')
+  assert_match('fake-model', Plain(win))
+  # A panel too narrow for everything: the model goes, the live status stays.
+  win_execute(win, 'vertical resize 54')
+  var narrow = Plain(win)
+  assert_notmatch('fake-model', narrow)
+  assert_match('[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] writing… · ask before edits', narrow)
+  assert_match('ctrl-c to stop', narrow)
+  # Narrower still: the hint goes, the status stays whole.
+  win_execute(win, 'vertical resize 44')
+  var tiny = Plain(win)
+  assert_notmatch('ctrl-c', tiny)
+  assert_match('writing… · ask before edits', tiny)
+  &columns = cols
+  unlet g:claude_include_context
+  StopAndWait()
 enddef
 
 def g:Test_messages_typed_while_busy_are_queued_and_sent_in_order()
   Reset()
+  var cols = &columns
+  &columns = 160
   claude.Open()
   claude.Send('DRIP first')
   assert_true(claude.Debug().busy)
   claude.Send('second')
   claude.Send('third')
   assert_match('⧗ Queued: second', join(ChatLines(), "\n"))
-  assert_match(' · 2 queued', claude#InputStatusLine(win_getid()))
+  assert_match('2 queued', WideBar())
   g:WaitFor('len(filter(g:FakeLog(), "v:val =~ ''^STDIN ''")) == 3 && !claude#Busy()', 6000)
   var sent = mapnew(filter(g:FakeLog(), (_, l) => l =~ '^STDIN '), (_, l) => json_decode(l[6 :]).message.content)
   assert_match('^DRIP first', sent[0])
   assert_match('^second', sent[1])
   assert_match('^third', sent[2])
-  assert_notmatch('queued', claude#InputStatusLine(win_getid()))
+  assert_notmatch('queued', WideBar())
   # Each one got its own message and reply in the transcript.
   assert_equal(3, len(filter(ChatLines(), (_, l) => l == '❯ You:')))
+  &columns = cols
 enddef
 
 def g:Test_unqueue_drops_waiting_messages()
   Reset()
+  var cols = &columns
+  &columns = 160
   claude.Send('SLOW one')
   claude.Send('two')
-  assert_match('1 queued', claude#InputStatusLine(win_getid()))
+  assert_match('1 queued', WideBar())
   execute 'ClaudeUnqueue'
   claude.Stop()
   g:WaitFor('!claude#Busy()')
   # Only the first message went out (the other STDIN line is the interrupt).
   assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^STDIN .*"role":"user"')))
+  &columns = cols
 enddef
 
 def g:Test_input_enter_while_busy_queues_instead_of_warning()
   Reset()
+  var cols = &columns
+  &columns = 160
   claude.Open()
   claude.Send('SLOW one')
   setbufline(claude.Debug().input_buf, 1, 'next thing')
   claude.SubmitInput()
   assert_equal([''], getbufline(claude.Debug().input_buf, 1, '$'))
-  assert_match('1 queued', claude#InputStatusLine(win_getid()))
+  assert_match('1 queued', WideBar())
   claude.Unqueue()
   StopAndWait()
+  &columns = cols
 enddef
 
 def g:Test_history_persists_per_project_and_is_searchable()

@@ -74,10 +74,11 @@ def g:Test_busy_placeholder_and_bars()
   assert_match('working', Placeholder(buf))
   bar = Plain(claude.InputStatusLine(input_win))
   assert_equal(winwidth(input_win), strwidth(bar))
-  assert_match('^  ctrl-c to stop ', bar)
-  # Activity sits next to the model; the top rule stays plain.
-  # The test window is narrow, so the right side is shortened from its start.
-  assert_match('….* · ask before edits $', bar)
+  # The test window is too narrow for the hint and the status together: the
+  # status (activity next to the mode) stays whole and the hint makes way.
+  assert_notmatch('ctrl-c', bar)
+  assert_notmatch('…$', bar)
+  assert_match('[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] thinking… · ask before edits $', bar)
   var wide = Plain(util.Bar([['ctrl-c', ''], [' to stop', '']],
     [['⠋ writing…', ''], [' · ', ''], ['ask before edits', '']], 80, 'R', true))
   assert_match('^  ctrl-c to stop \+⠋ writing… · ask before edits $', wide)

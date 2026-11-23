@@ -411,27 +411,54 @@ def ContextLabel(): string
 enddef
 
 export def InputStatusLine(winid: number = 0): string
-  var left: list<list<string>> = []
+  # Left side, richest first. When busy: how to stop, and what is queued.
+  var lefts: list<list<list<string>>> = []
   if busy
-    left = [['ctrl-c', 'ClaudeKey'], [' to stop', '']]
-    if !empty(queue)
-      left += [[' · ' .. len(queue) .. ' queued', 'ClaudeChip']]
+    var queued: list<list<string>> = empty(queue) ? [] : [[len(queue) .. ' queued', 'ClaudeChip']]
+    lefts = [[['ctrl-c', 'ClaudeKey'], [' to stop', '']] + (empty(queued) ? [] : [[' · ', '']] + queued)]
+    if !empty(queued)
+      add(lefts, queued)
     endif
   else
     var ctx = get(g:, 'claude_last_ctx', {})
     if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
-      left = [[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]
+      lefts = [[[fnamemodify(ctx.file, ':t') .. ':' .. ctx.line, 'ClaudeChip']]]
     endif
   endif
+  add(lefts, [])
+  var width = winwidth(winid != 0 ? winid : g:statusline_winid)
   var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
-  var right = [[(m == '' ? '' : m .. ' · ') .. (ctx_window > 0 && ctx_used > 0 ? ContextLabel() .. ' · ' : '')
-    .. get(MODE_LABELS, Mode(), Mode()), '']]
-  if busy
-    # What Claude is doing, right next to the model.
-    right = [[SPIN[spin_i % len(SPIN)] .. ' ' .. get(LIVE_LABELS, status_text, status_text .. '…'), 'ClaudeBusy'],
-      [' · ', '']] + right
-  endif
-  return util.Bar(left, right, winwidth(winid != 0 ? winid : g:statusline_winid), 'ClaudeRule', busy)
+  var has_ctx = ctx_window > 0 && ctx_used > 0
+  var mode_label = get(MODE_LABELS, Mode(), Mode())
+  # From the most to the least informative; a narrow panel loses the model,
+  # then the context, before the live status, and the hints go last.
+  var variants = [
+    (m == '' ? '' : m .. ' · ') .. (has_ctx ? ContextLabel() .. ' · ' : '') .. mode_label,
+    (has_ctx ? ContextLabel() .. ' · ' : '') .. mode_label,
+    mode_label,
+  ]
+  var live: list<list<string>> = busy
+    ? [[SPIN[spin_i % len(SPIN)] .. ' ' .. get(LIVE_LABELS, status_text, status_text .. '…'), 'ClaudeBusy'], [' · ', '']]
+    : []
+  var W = (segs: list<list<string>>): number => reduce(segs, (acc, x) => acc + strwidth(x[0]), 0)
+  var left: list<list<string>> = []
+  var right: list<list<string>> = live + [[variants[-1], '']]
+  var fits = false
+  for l in lefts
+    for v in variants
+      var r = live + [[v, '']]
+      if 2 + W(l) + (empty(l) ? 0 : 2) + W(r) + 1 <= width
+        left = l
+        right = r
+        fits = true
+        break
+      endif
+    endfor
+    if fits
+      break
+    endif
+  endfor
+  return util.Bar(left, right, width, 'ClaudeRule', busy && fits && !empty(left))
 enddef
 
 # g:claude_width: columns (> 1) or a fraction of the screen (<= 1); default half.
