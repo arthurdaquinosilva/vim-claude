@@ -40,6 +40,9 @@ run commands when you allow it, and keep context across messages.
   `/permissions`, `/resume`, `/help` and `/exit` are handled by the plugin.
 - **Session management.** `:ClaudeNew`, `:ClaudeResume` (picks from earlier
   sessions in this directory), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`.
+- **Rewind.** `:ClaudeRewind` (`<Leader>cu`, or `/rewind`) restores your files
+  to how they were before any message of the session, after showing which
+  files would change. The conversation is kept.
 - **Type ahead.** Messages sent while Claude is working are queued and go
   out in order when it finishes (`:ClaudeUnqueue` drops them).
 - **Input history.** `Ctrl-P` and `Ctrl-N` step through earlier messages and
@@ -73,6 +76,7 @@ Plug 'arthurdaquinosilva/vim-claude'
 | `<Leader>ci`         | inline edit selection or line             |
 | `<Leader>cn` / `cr`  | new chat / resume chat                    |
 | `<Leader>cm` / `cp`  | choose model / permission mode            |
+| `<Leader>cu`         | rewind files to an earlier message        |
 
 In the input box, `Enter` sends, `Ctrl-J` inserts a newline and `Ctrl-C` stops.
 In the transcript, `]]`/`[[` jump between messages, `gy` yanks a code block,

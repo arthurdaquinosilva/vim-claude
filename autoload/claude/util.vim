@@ -142,7 +142,7 @@ enddef
 # ---- slash commands
 
 # Handled by the plugin itself (the CLI can't do them without a terminal).
-export const LOCAL_COMMANDS = ['clear', 'new', 'model', 'permissions', 'mode', 'resume', 'help', 'exit', 'quit']
+export const LOCAL_COMMANDS = ['clear', 'new', 'model', 'permissions', 'mode', 'resume', 'rewind', 'help', 'exit', 'quit']
 # Used until the CLI has told us what it supports.
 export const BASIC_COMMANDS = ['clear', 'compact', 'context', 'cost', 'usage', 'init', 'model',
   'permissions', 'resume', 'help', 'exit', 'security-review']
@@ -153,7 +153,7 @@ export const COMMAND_DESCRIPTIONS = {
   context: 'Show context window usage', cost: 'Show session cost and usage', usage: 'Show usage limits',
   init: 'Create a CLAUDE.md for this project', model: 'Choose the model',
   permissions: 'Choose the permission mode', mode: 'Choose the permission mode',
-  resume: 'Reopen an earlier conversation', help: 'List the available commands',
+  resume: 'Reopen an earlier conversation', rewind: 'Restore files to an earlier message', help: 'List the available commands',
   exit: 'Close the panel', quit: 'Close the panel',
   'security-review': 'Review pending changes for security issues',
 }

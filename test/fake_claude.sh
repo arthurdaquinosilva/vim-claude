@@ -18,12 +18,21 @@ fi
 
 echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\",\"model\":\"fake-model\",\"slash_commands\":[\"hi\",\"clear\",\"compact\",\"cost\",\"model\",\"__internal\"]}"
 se() { echo "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"event\":$1}"; }
+nmsg=0
 while IFS= read -r line; do
   if [[ "$line" == *'"type":"control_request"'* ]]; then
     # Control requests sent while idle: log and acknowledge like the real CLI.
     printf '%s\n' "CTRL $line" >> "$log"
     rid=$(sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p' <<<"$line")
-    if [[ "$line" == *'"set_model"'* ]]; then
+    if [[ "$line" == *'"rewind_files"'* ]]; then
+      if [[ "$line" == *nocheckpoint* ]]; then
+        echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"canRewind\":false,\"error\":\"No file checkpoint found\"}}}"
+      elif [[ "$line" == *'"dry_run":true'* ]]; then
+        echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"canRewind\":true,\"filesChanged\":[\"$PWD/a.txt\",\"$PWD/sub/b.txt\"],\"insertions\":1,\"deletions\":2}}}"
+      else
+        echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"canRewind\":true,\"skippedLinks\":0}}}"
+      fi
+    elif [[ "$line" == *'"set_model"'* ]]; then
       m=$(sed -n 's/.*"model":"\([^"]*\)".*/\1/p' <<<"$line")
       echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"model\":\"claude-${m:-default}\"}}}"
     elif [[ "$line" == *'FAILMODE'* ]]; then
@@ -34,6 +43,12 @@ while IFS= read -r line; do
     continue
   fi
   printf '%s\n' "STDIN $line" >> "$log"
+  if [[ " $* " == *" --replay-user-messages "* && "$line" == *'"role":"user"'* ]]; then
+    # Like the real CLI: echo each user message back, numbered.
+    nmsg=$((nmsg + 1))
+    c=$(sed -n 's/.*"content":"\(.*\)"},"type":"user".*/\1/p' <<<"$line")
+    echo "{\"type\":\"user\",\"uuid\":\"u$nmsg\",\"isReplay\":true,\"parent_tool_use_id\":null,\"message\":{\"role\":\"user\",\"content\":\"$c\"}}"
+  fi
   if [[ "$line" == *SLOW* ]]; then
     se '{"type":"message_start"}'
     se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'

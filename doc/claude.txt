@@ -85,6 +85,12 @@ The statusline shows a spinner and what Claude is doing (thinking, using a
 tool), the model, how full the context window is (ctx 12%), and the
 permission mode. A warning appears when the context is 85% full. Each reply ends with its duration.
 
+Rewind: |:ClaudeRewind| (<Leader>cu, or `/rewind`) lists the messages you sent
+in this session. Pick one and the plugin asks the CLI which files changed
+since, shows them with the lines added and removed, and restores them when you
+confirm. Only files are restored; the conversation stays as it is. The CLI
+keeps the snapshots (|g:claude_checkpoints|).
+
 Type ahead: pressing <CR> while Claude is still working queues the message
 (shown as `⧗ Queued`, with a count in the info line). Queued messages are
 sent in order, each as its own message, as soon as Claude finishes; <C-c>
@@ -186,6 +192,7 @@ conversation is resumed on the next message).
 :[range]ClaudeEdit [instr]   *:ClaudeEdit*     Inline edit with diff review.
 :ClaudeAccept :ClaudeReject  *:ClaudeAccept* *:ClaudeReject*
 :ClaudeEditCancel            *:ClaudeEditCancel*  Cancel a running edit.
+:ClaudeRewind                *:ClaudeRewind*   Restore files to an earlier message.
 :ClaudeStop                  *:ClaudeStop*     Interrupt the current reply.
 :ClaudeUnqueue               *:ClaudeUnqueue*  Drop messages waiting to be sent.
 :ClaudeHealth                *:ClaudeHealth*   Check Vim, the CLI and the login.
@@ -208,6 +215,7 @@ Normal mode               Visual mode
   <Leader>cr  resume
   <Leader>cm  pick model
   <Leader>cp  pick permission mode
+  <Leader>cu  rewind files
 
 Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
     let g:claude_map_prefix = '<Leader>i'
@@ -247,6 +255,8 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_history_dir*      Where it is kept.               Default: ~/.local/state/vim-claude
 *g:claude_history_search_key* Key for history search.       Default: '<C-r>'
 *g:claude_queue_limit*      Most messages that can wait.    Default: 10
+*g:claude_checkpoints*      Let |:ClaudeRewind| restore     Default: v:true
+                            files (the CLI snapshots them).
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_debug_log*        File to append the raw CLI     Default: ''

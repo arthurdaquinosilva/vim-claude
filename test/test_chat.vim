@@ -742,3 +742,56 @@ def g:Test_history_persists_per_project_and_is_searchable()
   delete(proj, 'rf')
   g:claude_history_dir = tempname()
 enddef
+
+def g:Test_rewind_previews_then_restores_files()
+  Reset()
+  claude.Send('first change')
+  g:WaitFor('!claude#Busy()')
+  claude.Send('second change')
+  g:WaitFor('!claude#Busy()')
+  assert_match('--replay-user-messages', filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')[0])
+  claude.Rewind()
+  var menu = popup_list()[0]
+  var rows = getbufline(winbufnr(menu), 1, '$')
+  # Newest first, with the time.
+  assert_match('^\d\d:\d\d  second change', rows[0])
+  assert_match('^\d\d:\d\d  first change', rows[1])
+  popup_close(menu, 2)   # the first message
+  g:WaitFor('!empty(popup_list())')
+  var text = join(getbufline(winbufnr(popup_list()[0]), 1, '$'), "\n")
+  assert_match('Restore 2 files to before "first change"?  (+1 -2)', text)
+  assert_match('a.txt', text)
+  assert_match('sub/b.txt', text)
+  assert_match('conversation is kept', text)
+  feedkeys('y', 'tx')
+  g:WaitFor("join(" .. claude.Debug().chat_buf .. "->getbufline(1, '$'), '') =~ 'Restored'")
+  assert_match('↺ Restored 2 files to before: first change', join(ChatLines(), "\n"))
+  assert_equal([{subtype: 'rewind_files', user_message_id: 'u1', dry_run: true},
+    {subtype: 'rewind_files', user_message_id: 'u1'}], Ctrl())
+enddef
+
+def g:Test_rewind_cancel_changes_nothing_and_needs_history()
+  Reset()
+  claude.Rewind()
+  assert_match('nothing to rewind yet', execute('messages'))
+  claude.Send('only change')
+  g:WaitFor('!claude#Busy()')
+  claude.Rewind()
+  popup_close(popup_list()[0], 1)
+  g:WaitFor('!empty(popup_list())')
+  feedkeys('n', 'tx')
+  assert_equal([], popup_list())
+  assert_equal(0, len(filter(Ctrl(), (_, c) => !get(c, 'dry_run', false))))
+enddef
+
+def g:Test_rewind_is_refused_while_busy_or_without_checkpoints()
+  Reset()
+  claude.Send('SLOW work')
+  claude.Rewind()
+  assert_match('wait for the reply', execute('messages'))
+  StopAndWait()
+  g:claude_checkpoints = false
+  claude.Rewind()
+  assert_match('checkpoints are off', execute('messages'))
+  unlet g:claude_checkpoints
+enddef

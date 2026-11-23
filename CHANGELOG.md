@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `:ClaudeRewind` (`<Leader>cu`, `/rewind`): restore files to before any
+  message of the session, with a preview of what changes. Uses the CLI's own
+  file checkpoints (`g:claude_checkpoints`).
+
 - Type ahead: messages sent while Claude is busy are queued and sent in order
   (`:ClaudeUnqueue` clears them).
 - Input history is saved per project between Vim sessions, and `Ctrl-R`

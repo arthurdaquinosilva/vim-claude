@@ -45,6 +45,7 @@ command! -nargs=0 ClaudeNew claude.NewChat()
 command! -nargs=0 ClaudeStop claude.Stop()
 command! -nargs=0 ClaudeResume claude.Resume()
 command! -nargs=0 ClaudeHealth claude.Health()
+command! -nargs=0 ClaudeRewind claude.Rewind()
 command! -nargs=0 ClaudeUnqueue claude.Unqueue()
 command! -nargs=? -complete=custom,claude#CompleteModels ClaudeModel claude.SetModel(<q-args>)
 command! -nargs=? -complete=custom,claude#CompleteModes ClaudeMode claude.SetMode(<q-args>)
@@ -64,7 +65,7 @@ augroup END
 if !get(g:, 'claude_no_mappings', false)
   var p = get(g:, 'claude_map_prefix', '<Leader>c')
   for [key, cmd] in [['c', 'ClaudeToggle'], ['n', 'ClaudeNew'], ['r', 'ClaudeResume'],
-      ['m', 'ClaudeModel'], ['p', 'ClaudeMode'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd']]
+      ['m', 'ClaudeModel'], ['p', 'ClaudeMode'], ['u', 'ClaudeRewind'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd']]
     execute 'nnoremap <silent> ' .. p .. key .. ' <Cmd>' .. cmd .. '<CR>'
   endfor
   execute 'nnoremap <silent> ' .. p .. 'i :ClaudeEdit<CR>'

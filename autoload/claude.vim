@@ -63,6 +63,8 @@ var history: list<string> = []
 var hist_idx = -1
 var hist_loaded = false
 var hist_cwd = ''
+var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for rewinding
+var rewind_cbs: dict<func(dict<any>)> = {}
 var queue: list<dict<string>> = []      # messages typed while Claude was busy
 var file_cache: list<string> = []
 
@@ -784,6 +786,10 @@ def BuildArgs(): list<string>
   if HostPrompts()
     args += ['--permission-prompt-tool', 'stdio']
   endif
+  if Opt('checkpoints', true)
+    # The CLI numbers every message and snapshots files before they change.
+    args += ['--replay-user-messages']
+  endif
   if session_id != ''
     args += ['--resume', session_id]
   endif
@@ -834,6 +840,7 @@ def EnsureProcess(): bool
   stderr_tail = []
   job = job_start(BuildArgs(), {
     out_mode: 'nl', err_mode: 'nl', noblock: true, cwd: getcwd(),
+    env: Opt('checkpoints', true) ? {CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1'} : {},
     out_cb: (_, msg) => {
       if g == gen
         OnEvent(msg)
@@ -887,12 +894,16 @@ def FinishTurn()
   endif
   if touched_files
     touched_files = false
-    # Reload files Claude edited; buffers with unsaved changes still prompt.
-    var ar = &autoread
-    set autoread
-    silent! checktime
-    &autoread = ar
+    ReloadChanged()
   endif
+enddef
+
+# Reload files changed on disk; buffers with unsaved changes still prompt.
+def ReloadChanged()
+  var ar = &autoread
+  set autoread
+  silent! checktime
+  &autoread = ar
 enddef
 
 def SendRaw(payload: string): bool
@@ -977,7 +988,11 @@ def OnEvent(line: string)
       OnAssistant(get(ev, 'message', {}))
     endif
   elseif t == 'user'
-    OnToolResults(ev)
+    if get(ev, 'isReplay', false)
+      NoteReplay(ev)
+    else
+      OnToolResults(ev)
+    endif
   elseif t == 'result'
     OnResult(ev)
   elseif t == 'control_response'
@@ -1201,6 +1216,11 @@ enddef
 def OnControlResponse(ev: dict<any>)
   var r = get(ev, 'response', {})
   var id = get(r, 'request_id', '')
+  if has_key(rewind_cbs, id)
+    var Cb = remove(rewind_cbs, id)
+    Cb(r)
+    return
+  endif
   if has_key(mode_requests, id)
     remove(mode_requests, id)
     if get(r, 'subtype', '') == 'error'
@@ -1563,6 +1583,8 @@ def RunSlash(name: string, args: string, text: string): bool
     SetMode(args)
   elseif name == 'resume'
     Resume()
+  elseif name == 'rewind'
+    Rewind()
   elseif name == 'exit' || name == 'quit'
     Close()
   elseif name == 'help'
@@ -1612,6 +1634,7 @@ export def Send(text: string, display: string = '')
   Remember(text)
   file_cache = []
   RenderUser(display != '' ? display : text)
+  add(turns, {text: text, time: strftime('%H:%M'), uuid: ''})
   var mentions = util.FindRangeMentions(text)
   for m in mentions
     Info('↳ attached ' .. util.RangeLabel(m.path, m.l1, m.l2))
@@ -1957,6 +1980,7 @@ export def NewChat()
   ctx_used = 0
   session_cost = 0.0
   queue = []
+  turns = []
   session_id = ''
   model_name = ''
   session_allowed = []
@@ -2141,6 +2165,114 @@ def MentionComplete()
   var base = strpart(m[0], 1)
   var files = ProjectFiles()
   complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
+enddef
+
+# ---------------------------------------------------------------- rewind
+
+# The CLI echoes each message with an id; remember it for the matching turn.
+def NoteReplay(ev: dict<any>)
+  var c = get(get(ev, 'message', {}), 'content', '')
+  var text = type(c) == v:t_string ? c : (type(c) == v:t_list ? join(mapnew(c, (_, b) => type(b) == v:t_dict ? get(b, 'text', '') : ''), "\n") : '')
+  var uuid = get(ev, 'uuid', '')
+  if text == '' || uuid == ''
+    return
+  endif
+  for t in turns
+    if t.uuid == '' && stridx(text, t.text) == 0
+      t.uuid = uuid
+      return
+    endif
+  endfor
+enddef
+
+# Restore the files to how they were before one of your messages. (The
+# conversation itself stays as it is: the CLI can only rewind files.)
+export def Rewind()
+  if !Opt('checkpoints', true)
+    Warn('checkpoints are off (g:claude_checkpoints)')
+    return
+  endif
+  var avail = filter(copy(turns), (_, t) => t.uuid != '')
+  if busy
+    Warn('wait for the reply to finish (or stop it) before rewinding')
+    return
+  endif
+  if empty(avail) || !Running()
+    Warn('nothing to rewind yet: checkpoints cover messages sent in this session')
+    return
+  endif
+  reverse(avail)
+  var rows = mapnew(avail, (_, t) => t.time .. '  ' .. strcharpart(substitute(split(t.text, "\n")[0], '\s\+', ' ', 'g'), 0, 70))
+  popup_menu(rows, {title: ' Restore files to before… ', padding: [0, 1, 0, 1], border: [], maxheight: 15,
+    callback: (_, i) => {
+      if i > 0
+        PreviewRewind(avail[i - 1])
+      endif
+    }})
+enddef
+
+def PreviewRewind(t: dict<any>)
+  var id = NewId()
+  rewind_cbs[id] = (r: dict<any>) => {
+    var res = get(r, 'response', {})
+    if get(r, 'subtype', '') == 'error' || type(res) != v:t_dict || !get(res, 'canRewind', false)
+      Warn('cannot rewind: ' .. (type(res) == v:t_dict && get(res, 'error', '') != '' ? res.error : get(r, 'error', 'no checkpoint for that message')))
+      return
+    endif
+    var files = get(res, 'filesChanged', [])
+    if empty(files)
+      echo 'claude: no files changed since then'
+      return
+    endif
+    ConfirmRewind(t, files, get(res, 'insertions', 0), get(res, 'deletions', 0))
+  }
+  SendControl({type: 'control_request', request_id: id,
+    request: {subtype: 'rewind_files', user_message_id: t.uuid, dry_run: true}})
+enddef
+
+def ConfirmRewind(t: dict<any>, files: list<string>, ins: number, del: number)
+  var lines = mapnew(files[: 11], (_, f) => '  ' .. util.RelPath(f))
+  if len(files) > 12
+    add(lines, '  … and ' .. (len(files) - 12) .. ' more')
+  endif
+  var head = 'Restore ' .. len(files) .. ' file' .. (len(files) == 1 ? '' : 's') .. ' to before "'
+    .. strcharpart(substitute(split(t.text, "\n")[0], '\s\+', ' ', 'g'), 0, 40) .. '"?  (+' .. ins .. ' -' .. del .. ')'
+  var Do = () => {
+    var id = NewId()
+    rewind_cbs[id] = (r: dict<any>) => {
+      var res = get(r, 'response', {})
+      if get(r, 'subtype', '') == 'error' || type(res) != v:t_dict || !get(res, 'canRewind', false)
+        Warn('rewind failed: ' .. get(r, 'error', ''))
+        return
+      endif
+      ReloadChanged()
+      Info('↺ Restored ' .. len(files) .. ' file' .. (len(files) == 1 ? '' : 's') .. ' to before: '
+        .. strcharpart(substitute(split(t.text, "\n")[0], '\s\+', ' ', 'g'), 0, 50))
+    }
+    SendControl({type: 'control_request', request_id: id, request: {subtype: 'rewind_files', user_message_id: t.uuid}})
+  }
+  if !exists('*popup_create') || Opt('no_popups', false)
+    if confirm(head .. "\n" .. join(lines, "\n"), "&Yes\n&No", 2) == 1
+      Do()
+    endif
+    return
+  endif
+  popup_create([head, ''] + lines + ['', 'The conversation is kept; only files change.', '', '[y] restore   [n] cancel'], {
+    title: ' Rewind ', padding: [0, 1, 0, 1], border: [], pos: 'center', zindex: 200,
+    minwidth: 40, maxwidth: float2nr(&columns * 0.85), maxheight: &lines - 6, wrap: true, mapping: false,
+    filter: (id, key) => {
+      if ScrollKey(id, key)
+        return true
+      endif
+      if key == 'y' || key == 'Y'
+        popup_close(id)
+        Do()
+      elseif key == 'n' || key == 'N' || key == "\<Esc>" || key == "\<C-c>"
+        popup_close(id)
+      endif
+      return true
+    },
+  })
 enddef
 
 # ---------------------------------------------------------------- /commands
