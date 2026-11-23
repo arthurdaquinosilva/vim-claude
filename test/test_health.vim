@@ -7,7 +7,7 @@ def g:Test_health_reports_the_environment()
   $HOME = tempname()
   var out = execute('ClaudeHealth')
   $HOME = home
-  assert_match('WARN ~/.claude', out)
+  assert_match('WARN \~/.claude', out)
   assert_match('+job', out)
   assert_match('getregion()', out)
   assert_match('process', out)
