@@ -9,6 +9,7 @@ if [[ " $* " != *" --input-format "* ]]; then
   # One-shot inline edit: prompt on stdin, JSON result on stdout.
   prompt=$(cat)
   printf '%s\n' "PROMPT $prompt" >> "$log"
+  [[ "$prompt" == *"Instruction: HANG"* ]] && sleep 30
   if [[ "$prompt" == *"Instruction: FAIL"* ]]; then
     echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}'
   else
@@ -88,6 +89,29 @@ while IFS= read -r line; do
   fi
   if [[ "$line" == *CTX* ]]; then
     echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0548,"usage":{"input_tokens":10,"cache_read_input_tokens":900000,"cache_creation_input_tokens":100,"iterations":[{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0},{"input_tokens":20,"cache_read_input_tokens":879980,"cache_creation_input_tokens":0}]},"modelUsage":{"fake":{"contextWindow":1000000}},"permission_denials":[]}'
+    continue
+  fi
+  if [[ "$line" == *EXITFAST* ]]; then
+    # Finish the turn and exit at once: the result must not be mistaken for a crash.
+    se '{"type":"message_start"}'
+    se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
+    se '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"last words"}}'
+    se '{"type":"content_block_stop","index":0}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    exit 0
+  fi
+  if [[ "$line" == *DIE* ]]; then
+    se '{"type":"message_start"}'
+    se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
+    se '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"half an ans"}}'
+    echo "fatal: something broke" >&2
+    exit 3
+  fi
+  if [[ "$line" == *LIMIT* ]]; then
+    echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1795465800,"rateLimitType":"five_hour"}}'
+    echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1795465800,"rateLimitType":"five_hour"}}'
+    echo '{"type":"result","subtype":"success","is_error":true,"result":"You have hit your limit","permission_denials":[]}'
+    echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795465800,"rateLimitType":"five_hour"}}'
     continue
   fi
   if [[ "$line" == *TOOLS* ]]; then

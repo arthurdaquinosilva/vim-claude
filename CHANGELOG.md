@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Robustness: the `@` file list is built in the background (git, then find,
+  then glob) so a large repository no longer freezes Vim; a process exit is
+  reported only after its last output was handled; a cancelled inline edit can
+  no longer finish the next one; inline edits time out (`g:claude_edit_timeout`)
+  and refuse huge selections (`g:claude_edit_max_lines`).
+- Usage-limit events from the CLI are shown (once for warnings).
 - No longer needs `getregion()`, so Vim 9.0 is enough. CI runs Vim 9.1.0016
   (Ubuntu 24.04 LTS) and the latest release.
 - `!command` in the input runs in your shell and shows the output; Claude is

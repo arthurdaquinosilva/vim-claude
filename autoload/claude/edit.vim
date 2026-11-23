@@ -5,6 +5,7 @@ vim9script
 import autoload 'claude/util.vim'
 
 var pending: dict<any> = {}   # the request in flight, if any
+var next_id = 0
 var notice = 0
 
 def Opt(name: string, default: any): any
@@ -35,6 +36,12 @@ export def Start(l1: number, l2: number, instruction: string)
     Warn('an edit is already in progress (:ClaudeEditCancel to cancel)')
     return
   endif
+  var limit = Opt('edit_max_lines', 500)
+  if l2 - l1 + 1 > limit
+    Warn('selection too large for an inline edit (' .. (l2 - l1 + 1) .. ' lines, limit ' .. limit
+      .. '): select less, or ask in the chat panel')
+    return
+  endif
   var instr = instruction
   if instr == ''
     instr = input('Claude, edit lines ' .. l1 .. '-' .. l2 .. ': ')
@@ -58,7 +65,9 @@ export def Start(l1: number, l2: number, instruction: string)
   var all = getline(1, '$')
   var prompt = util.EditPrompt(expand('%:p'), &filetype, l1, l2, all, instr)
   var out: list<string> = []
-  pending = {buf: bufnr(), l1: l1, l2: l2, orig: getline(l1, l2), ft: &filetype, instr: instr,
+  next_id += 1
+  var id = next_id
+  pending = {id: id, buf: bufnr(), l1: l1, l2: l2, orig: getline(l1, l2), ft: &filetype, instr: instr,
     tick: b:changedtick}
   pending.job = job_start(args, {
     in_mode: 'raw', out_mode: 'raw', err_mode: 'raw', noblock: true, cwd: getcwd(),
@@ -67,7 +76,7 @@ export def Start(l1: number, l2: number, instruction: string)
     },
     exit_cb: (_, code) => {
       # Let any buffered stdout arrive before reading it.
-      timer_start(50, (_) => Finish(join(out, ''), code))
+      timer_start(50, (_) => Finish(join(out, ''), code, id))
     },
   })
   if job_status(pending.job) != 'run'
@@ -77,12 +86,29 @@ export def Start(l1: number, l2: number, instruction: string)
   endif
   ch_sendraw(pending.job, prompt)
   ch_close_in(pending.job)
+  var secs = Opt('edit_timeout', 120)
+  if secs > 0
+    var j = pending.job
+    pending.timer = timer_start(secs * 1000, (_) => {
+      if !empty(pending) && pending.job == j
+        Cancel()
+        Warn('edit timed out after ' .. secs .. 's')
+      endif
+    })
+  endif
   Notify('Claude is editing lines ' .. l1 .. '-' .. l2 .. '…  (:ClaudeEditCancel)')
+enddef
+
+def StopTimer(req: dict<any>)
+  if has_key(req, 'timer')
+    timer_stop(req.timer)
+  endif
 enddef
 
 export def Cancel()
   if !empty(pending)
     var j = pending.job
+    StopTimer(pending)
     pending = {}
     job_stop(j)
     Unnotify()
@@ -90,12 +116,13 @@ export def Cancel()
   endif
 enddef
 
-def Finish(raw: string, code: number)
-  Unnotify()
-  if empty(pending)
-    return  # cancelled
+def Finish(raw: string, code: number, id: number)
+  if empty(pending) || pending.id != id
+    return  # cancelled, or a newer edit is the one in flight now
   endif
+  Unnotify()
   var req = pending
+  StopTimer(req)
   pending = {}
   var res: any
   try

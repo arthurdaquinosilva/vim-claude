@@ -71,6 +71,8 @@ var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for 
 var rewind_cbs: dict<func(dict<any>)> = {}
 var queue: list<dict<string>> = []      # messages typed while Claude was busy
 var file_cache: list<string> = []
+var files_job: job = null_job
+var files_gen = 0                       # bumps when the list is thrown away
 
 # The directory the conversation works in. A :cd (or 'autochdir') after it
 # started does not move Claude to another project in the middle of a chat.
@@ -868,9 +870,13 @@ def EnsureProcess(): bool
       endif
     },
     exit_cb: (_, code) => {
-      if g == gen
-        OnExit(code)
-      endif
+      # Vim may report the exit before the last lines of output have been
+      # delivered; let them arrive (a final "result" ends the turn quietly).
+      timer_start(50, (_) => {
+        if g == gen
+          OnExit(code)
+        endif
+      })
     },
   })
   if job_status(job) != 'run'
@@ -1012,6 +1018,8 @@ def OnEvent(line: string)
     endif
   elseif t == 'result'
     OnResult(ev)
+  elseif t == 'rate_limit_event'
+    OnRateLimit(ev)
   elseif t == 'control_response'
     OnControlResponse(ev)
   elseif t == 'control_request'
@@ -1125,6 +1133,26 @@ def OnToolResults(ev: dict<any>)
   endfor
   status_text = 'thinking'
   UpdateLive()
+enddef
+
+# The CLI reports how close you are to a usage limit; say so when a reply is
+# held back, and (once) when a window is nearly used up.
+var rate_warned: dict<bool> = {}
+def OnRateLimit(ev: dict<any>)
+  var info = get(ev, 'rate_limit_info', {})
+  if type(info) != v:t_dict
+    return
+  endif
+  var status = get(info, 'status', 'allowed')
+  var kind = substitute(get(info, 'rateLimitType', 'usage'), '_', ' ', 'g')
+  var resets = get(info, 'resetsAt', 0)
+  var when = type(resets) == v:t_number && resets > 0 ? ', resets ' .. strftime('%H:%M', resets) : ''
+  if status == 'rejected'
+    Info('✖ Usage limit reached (' .. kind .. when .. ')')
+  elseif status != 'allowed' && !has_key(rate_warned, kind .. status)
+    rate_warned[kind .. status] = true
+    Info('! Close to your ' .. kind .. ' limit' .. when)
+  endif
 enddef
 
 # Context window fill after this reply, and the session cost so far.
@@ -1658,7 +1686,7 @@ export def Send(text: string, display: string = '')
     Open(false)
   endif
   Remember(text)
-  file_cache = []
+  InvalidateFiles()
   RenderUser(display != '' ? display : text)
   add(turns, {text: text, time: strftime('%H:%M'), uuid: ''})
   var mentions = util.FindRangeMentions(text)
@@ -2015,7 +2043,7 @@ export def NewChat()
   chat_cwd = ''
   fork_next = false
   shell_pending = []
-  file_cache = []
+  InvalidateFiles()
   session_id = ''
   model_name = ''
   session_allowed = []
@@ -2196,32 +2224,79 @@ enddef
 
 # ---------------------------------------------------------------- @mentions
 
+def InvalidateFiles()
+  file_cache = []
+  files_gen += 1
+  if job_status(files_job) == 'run'
+    job_stop(files_job)
+  endif
+enddef
+
+# Project files for @ completion. Listed in the background (a big repository
+# must not freeze Vim); the menu shows what is known and refreshes when the
+# list arrives.
 def ProjectFiles(): list<string>
-  if empty(file_cache)
-    var dir = ChatDir()
+  if empty(file_cache) && job_status(files_job) != 'run'
+    var tools: list<list<string>> = []
     if executable('git')
-      file_cache = systemlist('git -C ' .. shellescape(dir) .. ' ls-files --cached --others --exclude-standard 2>/dev/null')
-      if v:shell_error != 0
-        file_cache = []
-      endif
+      add(tools, ['git', '-C', ChatDir(), 'ls-files', '--cached', '--others', '--exclude-standard'])
     endif
-    if empty(file_cache)
-      var prefix = len(dir) + 1
-      file_cache = filter(mapnew(globpath(dir, '**/*', false, true), (_, f) => f[prefix :]), (_, f) => !isdirectory(dir .. '/' .. f))
+    if executable('find')
+      add(tools, ['find', '.', '-type', 'f', '-not', '-path', '*/.git/*', '-not', '-path', '*/node_modules/*'])
     endif
-    file_cache = file_cache[: 20000]
-    # Directories can be mentioned too: Claude lists what is in them.
-    var dirs: dict<bool> = {}
-    for f in file_cache
-      var d = fnamemodify(f, ':h')
-      while d != '.' && d != '/' && !has_key(dirs, d)
-        dirs[d] = true
-        d = fnamemodify(d, ':h')
-      endwhile
-    endfor
-    file_cache += mapnew(sort(keys(dirs)), (_, d) => d .. '/')
+    ListFiles(tools, 0)
   endif
   return file_cache
+enddef
+
+# Try the listing tools in turn (git, find, then Vim's own glob).
+def ListFiles(tools: list<list<string>>, n: number)
+  var dir = ChatDir()
+  if n >= len(tools)
+    SetFileCache(filter(mapnew(globpath(dir, '**/*', false, true), (_, f) => f[len(dir) + 1 :]),
+      (_, f) => !isdirectory(dir .. '/' .. f)))
+    return
+  endif
+  var found: list<string> = []
+  var started = files_gen
+  files_job = job_start(tools[n], {
+    in_io: 'null', err_io: 'null', out_mode: 'nl', cwd: dir, noblock: true,
+    out_cb: (_, l) => {
+      if len(found) < 20000
+        add(found, substitute(l, '^\./', '', ''))
+      endif
+    },
+    exit_cb: (_, code) => {
+      timer_start(20, (_) => {
+        if started != files_gen
+          return
+        endif
+        if code == 0 && !empty(found)
+          SetFileCache(found)
+        else
+          ListFiles(tools, n + 1)
+        endif
+      })
+    },
+  })
+enddef
+
+def SetFileCache(files: list<string>)
+  var all = files[: 20000]
+  # Directories can be mentioned too: Claude lists what is in them.
+  var dirs: dict<bool> = {}
+  for f in all
+    var d = fnamemodify(f, ':h')
+    while d != '.' && d != '/' && !has_key(dirs, d)
+      dirs[d] = true
+      d = fnamemodify(d, ':h')
+    endwhile
+  endfor
+  file_cache = all + mapnew(sort(keys(dirs)), (_, d) => d .. '/')
+  # Still typing an @mention in the input box: show the real list now.
+  if mode() =~ '^i' && bufnr() == input_buf
+    MentionComplete()
+  endif
 enddef
 
 export def CompleteMention(findstart: number, base: string): any

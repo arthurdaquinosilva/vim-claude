@@ -53,3 +53,38 @@ def g:Test_edit_discarded_if_buffer_changed_meanwhile()
   assert_equal(1, tabpagenr('$'))
   assert_match('buffer changed', execute('messages'))
 enddef
+
+def g:Test_edit_times_out_instead_of_hanging()
+  var src = Setup()
+  g:claude_edit_timeout = 1
+  edit.Start(1, 1, 'HANG')
+  g:WaitFor("execute('messages') =~ 'edit timed out after 1s'", 10000)
+  unlet g:claude_edit_timeout
+  assert_equal(1, tabpagenr('$'))
+  # Not stuck: a new edit can start.
+  edit.Start(2, 2, 'again')
+  g:WaitFor('tabpagenr("$") == 2')
+  ClaudeReject
+enddef
+
+def g:Test_edit_refuses_a_huge_selection()
+  var src = Setup()
+  setline(1, repeat(['line'], 600))
+  g:claude_edit_max_lines = 500
+  edit.Start(1, 600, 'rewrite everything')
+  unlet g:claude_edit_max_lines
+  assert_match('selection too large for an inline edit (600 lines, limit 500)', execute('messages'))
+  assert_equal(1, tabpagenr('$'))
+  assert_equal(0, len(filter(g:FakeLog(), (_, l) => l =~ '^PROMPT')))
+enddef
+
+def g:Test_a_cancelled_edit_cannot_finish_the_next_one()
+  var src = Setup()
+  edit.Start(1, 1, 'HANG')
+  edit.Cancel()
+  edit.Start(2, 2, 'real one')
+  # The cancelled process dies and reports its exit; that must not touch the new request.
+  g:WaitFor('tabpagenr("$") == 2')
+  assert_equal(2, tabpagenr('$'))
+  ClaudeReject
+enddef

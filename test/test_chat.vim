@@ -895,6 +895,8 @@ def g:Test_mentions_complete_directories_too()
   var old = getcwd()
   execute 'cd ' .. fnameescape(proj)
   claude.NewChat()
+  claude#CompleteMention(0, 'src')   # starts the listing in the background
+  g:WaitFor("!empty(claude#CompleteMention(0, 'src').words)")
   var words = claude#CompleteMention(0, 'src')
   execute 'cd ' .. fnameescape(old)
   delete(proj, 'rf')
@@ -968,4 +970,87 @@ def g:Test_message_typed_during_a_shell_command_waits_for_its_output()
   g:WaitFor('len(g:FakeLog()) > 0 && !claude#Busy() && len(filter(g:FakeLog(), "v:val =~ ''^STDIN ''")) == 1', 6000)
   assert_match('late output', Prompts()[0])
   assert_match('did it work?', Prompts()[0])
+enddef
+
+def g:Test_finishing_and_exiting_at_once_is_not_reported_as_a_crash()
+  Reset()
+  claude.Send('EXITFAST please')
+  g:WaitFor('!claude#Busy()')
+  sleep 200m
+  var chat = join(ChatLines(), "\n")
+  assert_match('last words', chat)
+  assert_notmatch('exited', chat)
+  # The next message starts a new process that resumes the session.
+  claude.Send('after')
+  g:WaitFor('!claude#Busy()')
+  var args = filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')
+  assert_equal(2, len(args))
+  assert_match('--resume 11111111-2222-3333-4444-555555555555', args[1])
+enddef
+
+def g:Test_a_crash_mid_reply_is_reported_and_recoverable()
+  Reset()
+  claude.Send('DIE now')
+  g:WaitFor('!claude#Busy()')
+  var chat = join(ChatLines(), "\n")
+  assert_match('half an ans', chat)
+  assert_match('✖ Claude process exited (code 3)', chat)
+  assert_match('fatal: something broke', chat)
+  assert_false(claude.Debug().busy)
+  claude.Send('try again')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(2, len(filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')))
+  assert_match('Hello', join(ChatLines(), "\n"))
+enddef
+
+def g:Test_file_listing_runs_in_the_background_and_follows_the_conversation()
+  var proj = resolve(tempname() .. '-proj')
+  mkdir(proj, 'p')
+  writefile(['x'], proj .. '/alpha.txt')
+  var old = getcwd()
+  execute 'cd ' .. fnameescape(proj)
+  claude.NewChat()
+  # Nothing is known yet on the first call (it must not block), then it fills.
+  assert_equal([], claude#CompleteMention(0, '').words)
+  g:WaitFor("index(claude#CompleteMention(0, '').words, 'alpha.txt') >= 0")
+  # A file created later shows up once the next message resets the list.
+  writefile(['x'], proj .. '/beta.txt')
+  assert_equal(-1, index(claude#CompleteMention(0, '').words, 'beta.txt'))
+  claude.Send('hello')
+  g:WaitFor('!claude#Busy()')
+  claude#CompleteMention(0, '')
+  g:WaitFor("index(claude#CompleteMention(0, '').words, 'beta.txt') >= 0")
+  execute 'cd ' .. fnameescape(old)
+  delete(proj, 'rf')
+enddef
+
+def g:Test_rate_limit_events_are_surfaced_once()
+  Reset()
+  claude.Send('LIMIT please')
+  g:WaitFor('!claude#Busy()')
+  var chat = join(ChatLines(), "\n")
+  # The warning appears once even though the CLI repeated it.
+  assert_equal(1, len(split(chat, '! Close to your five hour limit', 1)) - 1)
+  assert_match('✖ You have hit your limit', chat)
+  assert_match('✖ Usage limit reached (five hour, resets \d\d:\d\d)', chat)
+enddef
+
+def g:Test_panel_can_be_opened_in_several_tabs()
+  Reset()
+  claude.Open()
+  assert_equal(3, winnr('$'))
+  tabnew
+  assert_false(claude.IsOpen())
+  claude.Open()
+  assert_true(claude.IsOpen())
+  assert_equal(3, winnr('$'))
+  # One conversation behind both panels.
+  claude.Send('from the second tab')
+  g:WaitFor('!claude#Busy()')
+  assert_match('from the second tab', join(ChatLines(), "\n"))
+  claude.Close()
+  assert_equal(1, winnr('$'))
+  tabprevious
+  assert_true(claude.IsOpen())
+  tabclose!
 enddef

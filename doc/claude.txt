@@ -153,6 +153,9 @@ and the proposal on the right:
   do  dp         take or put single hunks with normal |diff| commands
 
 You can also edit the proposal buffer before accepting.
+A request that takes longer than |g:claude_edit_timeout| seconds is cancelled,
+and selections over |g:claude_edit_max_lines| lines are refused (ask in the
+chat panel instead).
 If the buffer changes while Claude is working, the proposal is discarded.
 
 ==============================================================================
@@ -247,6 +250,9 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_cmd*              CLI to run: string or list.     Default: 'claude'
 *g:claude_model*            Model alias or id.              Default: CLI default
 *g:claude_edit_model*       Model for |:ClaudeEdit|.        Default: g:claude_model
+*g:claude_edit_timeout*     Seconds before an inline edit   Default: 120
+                            is cancelled (0: never).
+*g:claude_edit_max_lines*   Largest selection to edit.     Default: 500
 *g:claude_permission_mode*  Starting mode.                  Default: 'default'
 *g:claude_permission_prompt* 'host': the CLI asks Vim and    Default: 'host'
                             waits for the answer; 'retry':
