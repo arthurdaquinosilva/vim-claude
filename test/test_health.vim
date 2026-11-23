@@ -9,7 +9,6 @@ def g:Test_health_reports_the_environment()
   $HOME = home
   assert_match('WARN \~/.claude', out)
   assert_match('+job', out)
-  assert_match('getregion()', out)
   assert_match('process', out)
   assert_notmatch('FAIL', out)
 enddef

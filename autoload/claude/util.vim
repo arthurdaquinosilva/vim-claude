@@ -442,6 +442,34 @@ export def Slice(l: list<string>, s: number, e: number): list<string>
   return e < s || s >= len(l) ? [] : l[s : e]
 enddef
 
+# The text of a visual selection from `lines` (the buffer lines l1..l2), like
+# getregion() but available on every Vim 9: `c1`/`c2` are byte columns as from
+# getpos(), `mode` is visualmode(): "v", "V" or CTRL-V.
+export def Region(lines: list<string>, c1: number, c2: number, mode: string): list<string>
+  if empty(lines)
+    return []
+  endif
+  if mode == 'V'
+    return copy(lines)
+  endif
+  var out = copy(lines)
+  if mode == 'v'
+    var last = len(out) - 1
+    # The selection includes the character under the last column.
+    var endcol = min([c2, strlen(out[last])])
+    var endlen = strlen(matchstr(out[last], '.', max([endcol - 1, 0])))
+    out[last] = strpart(out[last], 0, endcol - 1 + endlen)
+    out[0] = strpart(out[0], c1 - 1)
+    return out
+  endif
+  # Blockwise: the same character columns on every line.
+  var cc1 = charidx(lines[0], min([c1 - 1, strlen(lines[0])]))
+  var cc2 = charidx(lines[-1], min([c2 - 1, strlen(lines[-1])]))
+  var a1 = min([cc1, cc2])
+  var a2 = max([cc1, cc2])
+  return mapnew(lines, (_, l) => strcharpart(l, a1, a2 - a1 + 1))
+enddef
+
 # Images mentioned as @path (png, jpg, gif, webp): [{path, media}].
 export def FindImageMentions(text: string): list<dict<string>>
   var found: list<dict<string>> = []

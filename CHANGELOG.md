@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- No longer needs `getregion()`: the minimum is Vim 9.0.1000 (CI runs that
+  and the latest release).
+
 - `!command` in the input runs in your shell and shows the output; Claude is
   told what you ran with your next message.
 - `@image.png` mentions attach the image (png, jpg, gif, webp).

@@ -1971,8 +1971,10 @@ enddef
 export def QuoteSelection()
   var p1 = getpos("'<")
   var p2 = getpos("'>")
-  # (call(): the first getregion() release had a wrong argument check in Vim9)
-  var lines: list<string> = call('getregion', [p1, p2, {type: visualmode()}])
+  if p1[1] > p2[1] || (p1[1] == p2[1] && p1[2] > p2[2])
+    [p1, p2] = [p2, p1]
+  endif
+  var lines = util.Region(getbufline(chat_buf, p1[1], p2[1]), p1[2], p2[2], visualmode())
   # Drop the transcript's body indent, except where the selection started
   # mid-line (that text has no indent to drop).
   for i in range(len(lines))
@@ -2526,7 +2528,6 @@ export def Health()
   for feat in ['job', 'channel', 'timers', 'popupwin', 'textprop']
     Row(has(feat) == 1, '+' .. feat)
   endfor
-  Row(exists('*getregion') == 1, 'getregion()', 'needs Vim 9.1.0120+')
   var cmd = Opt('cmd', 'claude')
   var exe = type(cmd) == v:t_list ? cmd[0] : cmd
   if executable(exe)

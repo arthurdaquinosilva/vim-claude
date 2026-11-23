@@ -16,9 +16,6 @@ else
       add(missing, '+' .. feat)
     endif
   endfor
-  if !exists('*getregion')
-    add(missing, 'getregion() (Vim 9.1.0120+)')
-  endif
 endif
 if !empty(missing)
   echohl WarningMsg

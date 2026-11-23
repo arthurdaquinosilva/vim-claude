@@ -55,7 +55,7 @@ run commands when you allow it, and keep context across messages.
 
 ## Install
 
-Requires Vim 9.1.0120+ (`+job +channel +timers +popupwin +textprop`; Neovim
+Requires Vim 9.0.1000+ (`+job +channel +timers +popupwin +textprop`; Neovim
 and Windows are not supported) and
 [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in.
 

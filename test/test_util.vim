@@ -359,3 +359,21 @@ def g:Test_FindImageMentions()
   assert_equal([{path: '/tmp/x.webp', media: 'image/webp'}], util.FindImageMentions("@/tmp/x.webp\nthanks"))
   assert_equal([], util.FindImageMentions('mail me@x.png or @notes.txt or a.png'))
 enddef
+
+def g:Test_Region_matches_a_visual_selection()
+  var L = ['abc def', 'second line', 'third']
+  # Characterwise: from the first column to the last, both included.
+  assert_equal(['def', 'second l'], util.Region(L[0 : 1], 5, 8, 'v'))
+  assert_equal(['c def', 'sec'], util.Region(L[0 : 1], 3, 3, 'v'))
+  assert_equal(['bc'], util.Region(['abc def'], 2, 3, 'v'))
+  # Linewise: whole lines.
+  assert_equal(L[0 : 1], util.Region(L[0 : 1], 5, 2, 'V'))
+  # To the end of the line ($ gives a huge column).
+  assert_equal(['def'], util.Region(['abc def'], 5, 2147483647, 'v'))
+  # Multibyte characters are not cut in half.
+  assert_equal(['é→x'], util.Region(['aé→xz'], 2, 7, 'v'))
+  assert_equal(['é→'], util.Region(['aé→xz'], 2, 4, 'v'))
+  # Blockwise: the same columns on every line.
+  assert_equal(['cde', 'ijk'], util.Region(['abcdef', 'ghijkl'], 3, 5, "\<C-v>"))
+  assert_equal([], util.Region([], 1, 1, 'v'))
+enddef
