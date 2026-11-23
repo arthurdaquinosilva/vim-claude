@@ -25,9 +25,10 @@ run commands when you allow it, and keep context across messages.
   restarts, and changed buffers are reloaded.
 - **Interrupt.** `Ctrl-C` stops a reply in under a second and keeps the
   session (and its prompt cache) alive.
-- **Tool activity.** Lines such as `● Read src/app.py` and `● Bash npm test`
-  show what Claude did. The statusline has a spinner, the model and the
-  permission mode.
+- **Tool activity.** `● Read src/app.py`, `● Edit …` and `● Bash npm test`
+  show what Claude did, with the result under each: numbered diffs for edits,
+  the first lines of command output, line counts for reads and todo
+  checklists. The statusline has a spinner, the model and the permission mode.
 - **Session management.** `:ClaudeNew`, `:ClaudeResume` (picks from earlier
   sessions in this directory), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`.
 - **Input history.** `Ctrl-P` and `Ctrl-N` in the input box.

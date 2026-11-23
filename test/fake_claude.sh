@@ -35,6 +35,20 @@ while IFS= read -r line; do
     fi
     continue
   fi
+  if [[ "$line" == *TOOLS* ]]; then
+    tu() { echo "{\"type\":\"assistant\",\"parent_tool_use_id\":null,\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"$1\",\"name\":\"$2\",\"input\":$3}]}}"; }
+    tr() { echo "{\"type\":\"user\",\"parent_tool_use_id\":null,\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"$1\",\"content\":$2}]},\"tool_use_result\":$3}"; }
+    tu r1 Read '{"file_path":"a.txt"}'
+    tr r1 '"1\tone\n2\ttwo"' '{"type":"text","file":{"numLines":42}}'
+    tu e1 Edit '{"file_path":"a.txt","old_string":"two","new_string":"2"}'
+    tr e1 '"updated"' '{"structuredPatch":[{"oldStart":1,"oldLines":3,"newStart":1,"newLines":3,"lines":[" one","-two","+2"," three"]}]}'
+    tu b1 Bash '{"command":"ls"}'
+    tr b1 '"x"' '{"stdout":"a.txt\nb.txt\nc.txt\nd.txt\ne.txt\nf.txt\ng.txt\nh.txt\ni.txt\nj.txt","stderr":""}'
+    tu t1 TodoWrite '{"todos":[{"content":"Plan","status":"completed","activeForm":"Planning"},{"content":"Build","status":"in_progress","activeForm":"Building"},{"content":"Ship","status":"pending","activeForm":"Shipping"}]}'
+    tr t1 '"ok"' '{}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    continue
+  fi
   if [[ "$line" == *CTRLPERM* ]]; then
     # Synchronous permission prompts: two requests, then act on the answers.
     echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a.txt"}}]}}'

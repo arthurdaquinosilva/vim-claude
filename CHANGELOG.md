@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Tool results are shown under each call: numbered diffs (from the CLI's own
+  patch) for Edit/MultiEdit/Write, the first lines of Bash output, line
+  counts for Read/Grep/Glob and a checklist for TodoWrite. See
+  `g:claude_tool_details` and `g:claude_tool_lines`.
+
 - Permission prompts are now synchronous (`--permission-prompt-tool stdio`):
   Claude waits while a popup shows the diff or command, and the answer
   (allow, allow for the session, accept edits, deny) applies in place, with

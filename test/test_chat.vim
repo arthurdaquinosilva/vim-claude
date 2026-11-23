@@ -434,3 +434,37 @@ def g:Test_quote_selection_from_reply_into_input()
   win_gotoid(win_findbuf(claude.Debug().chat_buf)[0])
   assert_match('QuoteSelection', maparg('<CR>', 'x'))
 enddef
+
+def g:Test_tool_results_show_diffs_output_and_todos()
+  Reset()
+  claude.Send('TOOLS please')
+  g:WaitFor('!claude#Busy()')
+  var lines = ChatLines()
+  var i = index(lines, '  ● Read a.txt')
+  assert_equal('    ⎿ Read 42 lines', lines[i + 1])
+  i = index(lines, '  ● Edit a.txt')
+  assert_equal('    ⎿ Updated a.txt with 1 addition and 1 removal', lines[i + 1])
+  assert_equal(['       1   one', '       2 - two', '       2 + 2', '       3   three'], lines[i + 2 : i + 5])
+  # Output is capped, with the remainder counted.
+  i = index(lines, '  ● Bash ls')
+  assert_equal('    ⎿ a.txt', lines[i + 1])
+  assert_equal(['      b.txt', '      c.txt', '      d.txt', '      … +6 lines'], lines[i + 2 : i + 5])
+  # Todo list.
+  i = index(lines, '  ● Update todo list')
+  assert_equal(['    ⎿ ☒ Plan', '      ◼ Building', '      ☐ Ship'], lines[i + 1 : i + 3])
+  # Added and removed lines are highlighted.
+  var buf = claude.Debug().chat_buf
+  var ed = index(lines, '  ● Edit a.txt') + 2
+  var kinds = mapnew(range(ed + 1, ed + 3), (_, l) => map(prop_list(l, {bufnr: buf}), (_, p) => p.type))
+  assert_equal([['claude_tool_ctx'], ['claude_tool_del'], ['claude_tool_add']], kinds)
+enddef
+
+def g:Test_tool_details_can_be_turned_off()
+  g:claude_tool_details = false
+  Reset()
+  claude.Send('TOOLS please')
+  g:WaitFor('!claude#Busy()')
+  unlet g:claude_tool_details
+  assert_equal(-1, index(ChatLines(), '    ⎿ Read 42 lines'))
+  assert_notequal(-1, index(ChatLines(), '  ● Read a.txt'))
+enddef

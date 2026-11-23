@@ -27,6 +27,7 @@ var perm_mode = ''
 var session_allowed: list<string> = []   # --allowedTools rules ('retry' prompts only)
 var prompts: list<dict<any>> = []        # tool permission requests waiting for an answer
 var prompt_popup = 0                     # popup showing prompts[0]
+var tool_calls: dict<dict<any>> = {}     # tool_use id -> {name, input}, until its result arrives
 var interrupting = false                 # an interrupt was sent, waiting for the turn to end
 var interrupt_timer = 0
 
@@ -109,6 +110,10 @@ def SetupChatBuf()
   prop_type_add('claude_time', {bufnr: chat_buf, highlight: 'ClaudeTime'})
   prop_type_add('claude_live', {bufnr: chat_buf, highlight: 'ClaudeLive'})
   prop_type_add('claude_user', {bufnr: chat_buf, highlight: 'ClaudeUserText'})
+  for [kind, hl] in items({add: 'ClaudeDiffAdd', del: 'ClaudeDiffDel', ctx: 'ClaudeToolDim', out: 'ClaudeToolDim',
+      todo: 'ClaudeToolDim', doing: 'ClaudeLive', done: 'ClaudeToolDone', err: 'ClaudeToolErr'})
+    prop_type_add('claude_tool_' .. kind, {bufnr: chat_buf, highlight: hl})
+  endfor
 
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
@@ -267,6 +272,11 @@ def DefineHighlights()
   highlight default ClaudeAssistant ctermfg=173 guifg=#d97757 cterm=bold gui=bold
   highlight default ClaudeLive ctermfg=173 guifg=#d97757
   highlight default link ClaudeTime Comment
+  highlight default link ClaudeDiffAdd DiffAdd
+  highlight default link ClaudeDiffDel DiffDelete
+  highlight default link ClaudeToolDim Comment
+  highlight default link ClaudeToolDone Comment
+  highlight default link ClaudeToolErr WarningMsg
   highlight default link ClaudeUserText Comment
   var spc = hlget('Special', true)
   var sp0 = empty(spc) ? {} : spc[0]
@@ -841,6 +851,7 @@ enddef
 def FinishTurn()
   CloseText()
   ClearInterrupt()
+  tool_calls = {}
   SetBusy(false)
   if touched_files
     touched_files = false
@@ -955,6 +966,13 @@ def OnAssistant(msg: dict<any>)
       endif
       Info('● ' .. util.ToolSummary(name, get(c, 'input', {})))
       last_kind = 'tool'
+      var tid = get(c, 'id', '')
+      if tid != ''
+        tool_calls[tid] = {name: name, input: get(c, 'input', {})}
+        if name == 'TodoWrite' && Opt('tool_details', true)
+          ToolDetail(util.ToolResult(name, get(c, 'input', {}), '', {}))
+        endif
+      endif
     elseif ct == 'text' && !streamed
       # CLI without partial messages: render the whole block at once.
       EnsureClaudeHeader()
@@ -964,19 +982,51 @@ def OnAssistant(msg: dict<any>)
   endfor
 enddef
 
+# Lines under a tool call: "⎿ first line" and indented continuations, each
+# highlighted by its kind (diff added/removed, dim output, errors...).
+def ToolDetail(items: list<dict<any>>)
+  if empty(items) || !bufexists(chat_buf)
+    return
+  endif
+  CloseText()
+  if last_kind == 'text' || last_kind == 'user'
+    EnsureBlank()
+  endif
+  var first_prefix = '    ⎿ '
+  var rest_prefix = '      '
+  var start = LineCount() + (BufEmpty() ? 0 : 1)
+  Append(mapnew(items, (i, it) => (i == 0 ? first_prefix : rest_prefix) .. it.text))
+  for i in range(len(items))
+    if items[i].text != ''
+      prop_add(start + i, strlen(i == 0 ? first_prefix : rest_prefix) + 1,
+        {bufnr: chat_buf, type: 'claude_tool_' .. items[i].kind, length: strlen(items[i].text)})
+    endif
+  endfor
+  last_kind = 'tool'
+enddef
+
 def OnToolResults(ev: dict<any>)
   var content = get(get(ev, 'message', {}), 'content', [])
   if type(content) != v:t_list || IsSubagent(ev)
     return
   endif
+  var top = get(ev, 'tool_use_result', {})
   for c in content
-    if type(c) == v:t_dict && get(c, 'type', '') == 'tool_result' && get(c, 'is_error', false)
-      var body = get(c, 'content', '')
-      var text = type(body) == v:t_string ? body : (type(body) == v:t_list && !empty(body) ? get(body[0], 'text', '') : '')
-      if text !~ 'permission\|denied\|requested permissions'
-        Info('  ⎿ ' .. strcharpart(substitute(text, '\n.*', '', ''), 0, 100))
-        last_kind = 'tool'
+    if type(c) != v:t_dict || get(c, 'type', '') != 'tool_result'
+      continue
+    endif
+    var tid = get(c, 'tool_use_id', '')
+    var call = get(tool_calls, tid, {})
+    if has_key(tool_calls, tid)
+      remove(tool_calls, tid)
+    endif
+    var text = util.ResultText(get(c, 'content', ''))
+    if get(c, 'is_error', false)
+      if text !~ 'permission\|denied\|requested permissions\|Request interrupted'
+        ToolDetail([{text: strcharpart(substitute(text, '\n.*', '', ''), 0, 100), kind: 'err'}])
       endif
+    elseif !empty(call) && call.name != 'TodoWrite' && Opt('tool_details', true)
+      ToolDetail(util.ToolResult(call.name, call.input, get(c, 'content', ''), top, Opt('tool_lines', 12)))
     endif
   endfor
   status_text = 'thinking'

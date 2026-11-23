@@ -139,9 +139,179 @@ export def DenialRule(denial: dict<any>): string
   return name
 enddef
 
+# ---- what a finished tool call shows in the transcript
+
+export def ResultText(content: any): string
+  if type(content) == v:t_string
+    return content
+  elseif type(content) == v:t_list
+    return join(filter(map(copy(content), (_, c) => type(c) == v:t_dict ? get(c, 'text', '') : ''), (_, t) => t != ''), "\n")
+  endif
+  return ''
+enddef
+
+def Plural(n: number, word: string): string
+  return n .. ' ' .. word .. (n == 1 ? '' : 's')
+enddef
+
+def Clip(text: string, n: number = 200): string
+  return strcharlen(text) > n ? strcharpart(text, 0, n - 1) .. '…' : text
+enddef
+
+# Numbered diff lines from the CLI's structuredPatch hunks, keeping one line
+# of context around each change. Returns [items, added, removed].
+def PatchLines(patch: list<any>, limit: number): list<any>
+  var rows: list<list<any>> = []   # [number, sign, text]
+  var added = 0
+  var removed = 0
+  for h in patch
+    var ol = get(h, 'oldStart', 1)
+    var nl = get(h, 'newStart', 1)
+    var hl: list<list<any>> = []
+    for l in get(h, 'lines', [])
+      var c = l[0]
+      if c == '-'
+        add(hl, [ol, '-', l[1 :]])
+        ol += 1
+        removed += 1
+      elseif c == '+'
+        add(hl, [nl, '+', l[1 :]])
+        nl += 1
+        added += 1
+      else
+        add(hl, [nl, ' ', l[1 :]])
+        ol += 1
+        nl += 1
+      endif
+    endfor
+    var keep = mapnew(hl, (i, r) => r[1] != ' ' || (i > 0 && hl[i - 1][1] != ' ') || (i < len(hl) - 1 && hl[i + 1][1] != ' '))
+    var gap = false
+    for i in range(len(hl))
+      if keep[i]
+        if gap && !empty(rows)
+          add(rows, [0, '⋮', ''])
+        endif
+        add(rows, hl[i])
+        gap = false
+      else
+        gap = true
+      endif
+    endfor
+  endfor
+  var w = max([2, len(string(max(map(copy(rows), (_, r) => r[0]) + [0])))])
+  var items: list<dict<any>> = []
+  for r in rows
+    var kind = r[1] == '+' ? 'add' : r[1] == '-' ? 'del' : 'ctx'
+    if r[1] == '⋮'
+      add(items, {text: repeat(' ', w) .. ' ⋮', kind: 'ctx'})
+    else
+      add(items, {text: printf('%*d %s %s', w, r[0], r[1], Clip(r[2])), kind: kind})
+    endif
+  endfor
+  if len(items) > limit
+    var more = len(items) - (limit - 1)
+    items = items[: limit - 2] + [{text: '… +' .. Plural(more, 'line'), kind: 'ctx'}]
+  endif
+  return [items, added, removed]
+enddef
+
+# Patch for an Edit/MultiEdit/Write when the CLI didn't send one: the changed
+# lines only.
+def InputPatch(name: string, inp: dict<any>): list<any>
+  var hunks: list<dict<any>> = []
+  var pairs: list<list<string>> = []
+  if name == 'Edit'
+    pairs = [[get(inp, 'old_string', ''), get(inp, 'new_string', '')]]
+  elseif name == 'MultiEdit'
+    pairs = mapnew(get(inp, 'edits', []), (_, e) => [get(e, 'old_string', ''), get(e, 'new_string', '')])
+  endif
+  for [o, n] in pairs
+    var a = split(o, "\n", 1)
+    var b = split(n, "\n", 1)
+    var m = MinimalReplace(a, b)
+    var lines = mapnew(Slice(a, m[0] - 1, m[1] - 1), (_, l) => '-' .. l) + mapnew(m[2], (_, l) => '+' .. l)
+    add(hunks, {oldStart: m[0], newStart: m[0], lines: lines})
+  endfor
+  return hunks
+enddef
+
+# What to show under a finished tool call: [{text, kind}], where kind is one
+# of add, del, ctx, out, todo, doing, done. The first item goes after the "⎿".
+# `top` is the event's tool_use_result (richer than the plain content).
+export def ToolResult(name: string, input: any, content: any, top: any, limit: number = 12): list<dict<any>>
+  var inp = type(input) == v:t_dict ? input : {}
+  var res = type(top) == v:t_dict ? top : {}
+  var text = ResultText(content)
+  var path = RelPath(get(inp, 'file_path', get(inp, 'notebook_path', '')))
+  if name == 'Read'
+    var f = get(res, 'file', {})
+    var n = type(f) == v:t_dict && has_key(f, 'numLines') ? f.numLines : len(split(text, "\n"))
+    return [{text: 'Read ' .. Plural(n, 'line'), kind: 'out'}]
+  elseif name == 'Edit' || name == 'MultiEdit' || name == 'Write'
+    var patch = get(res, 'structuredPatch', [])
+    if type(patch) != v:t_list || empty(patch)
+      if name == 'Write'
+        var body = split(get(inp, 'content', ''), "\n", 1)
+        if !empty(body) && body[-1] == ''
+          remove(body, -1)
+        endif
+        var shown = min([len(body), max([limit - 2, 1])])
+        var items = [{text: 'Wrote ' .. Plural(len(body), 'line') .. ' to ' .. path, kind: 'out'}]
+        var w = len(string(shown))
+        for i in range(shown)
+          add(items, {text: printf('%*d + %s', w, i + 1, Clip(body[i])), kind: 'add'})
+        endfor
+        if len(body) > shown
+          add(items, {text: '… +' .. Plural(len(body) - shown, 'line'), kind: 'ctx'})
+        endif
+        return items
+      endif
+      patch = InputPatch(name, inp)
+    endif
+    var [items, a, r] = PatchLines(patch, limit)
+    var head = 'Updated ' .. path
+    if a + r > 0
+      head ..= ' with ' .. Plural(a, 'addition') .. ' and ' .. Plural(r, 'removal')
+    endif
+    return [{text: head, kind: 'out'}] + items
+  elseif name == 'Bash'
+    var out = text
+    if !empty(res)
+      out = get(res, 'stdout', '') .. (get(res, 'stderr', '') != '' ? "\n" .. res.stderr : '')
+    endif
+    var lines = split(substitute(out, '\n\+$', '', ''), "\n", 1)
+    if empty(out) || out =~ '^\s*$'
+      return [{text: '(no output)', kind: 'out'}]
+    endif
+    var items = mapnew(lines[: max([limit - 8, 1]) - 1], (_, l) => ({text: Clip(l), kind: 'out'}))
+    if len(lines) > len(items)
+      add(items, {text: '… +' .. Plural(len(lines) - len(items), 'line'), kind: 'ctx'})
+    endif
+    return items
+  elseif name == 'Grep' || name == 'Glob'
+    var n = len(filter(split(text, "\n"), (_, l) => l != ''))
+    return [{text: n == 0 ? 'No matches' : 'Found ' .. Plural(n, name == 'Glob' ? 'file' : 'line'), kind: 'out'}]
+  elseif name == 'TodoWrite'
+    var todos = get(inp, 'todos', [])
+    var items: list<dict<any>> = []
+    for t in todos
+      var st = get(t, 'status', 'pending')
+      if st == 'completed'
+        add(items, {text: '☒ ' .. get(t, 'content', ''), kind: 'done'})
+      elseif st == 'in_progress'
+        add(items, {text: '◼ ' .. get(t, 'activeForm', get(t, 'content', '')), kind: 'doing'})
+      else
+        add(items, {text: '☐ ' .. get(t, 'content', ''), kind: 'todo'})
+      endif
+    endfor
+    return items
+  endif
+  return []
+enddef
+
 # Lines describing what a tool call is about to do, for the permission popup:
 # edits as "- old" / "+ new", commands as they are, anything else as key: value.
-export def PermissionPreview(name: string, input: any, max: number = 14): list<string>
+export def PermissionPreview(name: string, input: any, limit: number = 14): list<string>
   var inp = type(input) == v:t_dict ? input : {}
   var out: list<string> = []
   var Lines = (text: any, prefix: string): list<string> =>
@@ -168,9 +338,9 @@ export def PermissionPreview(name: string, input: any, max: number = 14): list<s
       add(out, k .. ': ' .. (type(v) == v:t_string ? substitute(v, '\n', ' ', 'g') : string(v)))
     endfor
   endif
-  if len(out) > max
-    var more = len(out) - (max - 1)
-    out = out[: max - 2] + ['… ' .. more .. ' more line' .. (more == 1 ? '' : 's')]
+  if len(out) > limit
+    var more = len(out) - (limit - 1)
+    out = out[: limit - 2] + ['… ' .. more .. ' more line' .. (more == 1 ? '' : 's')]
   endif
   return map(out, (_, l) => strcharlen(l) > 100 ? strcharpart(l, 0, 99) .. '…' : l)
 enddef

@@ -18,7 +18,7 @@ syntax region claudeMsgClaude matchgroup=claudeClaude start=/^✻ Claude:$/
       \ end=/^\ze\%(❯ You\|✻ Claude\):$/ keepend contains=TOP,claudeMsgYou,claudeMsgClaude
 syntax sync fromstart
 syntax match claudeTool   /^  ● .*$/
-syntax match claudeToolErr /^    ⎿ .*$/
+syntax match claudeToolRes /^    ⎿ /
 syntax match claudeAttach /^  ↳ .*$/
 syntax match claudeError  /^  [✖!] .*$/
 syntax match claudeOk     /^  [✓✗■] .*$/
@@ -32,7 +32,7 @@ syntax match claudeTableBorder /[┌┬┐├┼┤└┴┘─│]/ contained
 highlight default link claudeUser    ClaudeYou
 highlight default link claudeClaude  ClaudeAssistant
 highlight default link claudeTool    Comment
-highlight default link claudeToolErr WarningMsg
+highlight default link claudeToolRes Comment
 highlight default link claudeAttach  Directory
 highlight default link claudeError   ErrorMsg
 highlight default link claudeOk      MoreMsg

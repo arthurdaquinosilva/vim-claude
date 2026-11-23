@@ -280,3 +280,42 @@ def g:Test_AllowRule_scopes_bash_to_the_command()
   assert_true(util.IsEditTool('Write'))
   assert_false(util.IsEditTool('Bash'))
 enddef
+
+def g:Test_ToolResult_edit_uses_the_patch_with_numbered_lines()
+  var patch = [{oldStart: 8, newStart: 8, lines: ['  keep', ' a', '-old1', '-old2', '+new', ' b', ' c', ' d']}]
+  var r = util.ToolResult('Edit', {file_path: 'x.py'}, '', {structuredPatch: patch})
+  assert_equal('Updated x.py with 1 addition and 2 removals', r[0].text)
+  # One line of context around the change; the rest is dropped.
+  assert_equal([' 9   a', '10 - old1', '11 - old2', '10 + new', '11   b'],
+    mapnew(r[1 :], (_, i) => i.text)[0 : 4]->mapnew((_, t) => t))
+  assert_equal(['ctx', 'del', 'del', 'add', 'ctx'], mapnew(r[1 :], (_, i) => i.kind))
+enddef
+
+def g:Test_ToolResult_edit_falls_back_to_the_input()
+  var r = util.ToolResult('Edit', {file_path: 'x', old_string: "a\nb\nc", new_string: "a\nB\nc"}, '', {})
+  assert_equal('Updated x with 1 addition and 1 removal', r[0].text)
+  assert_equal(['del', 'add'], mapnew(r[1 :], (_, i) => i.kind))
+enddef
+
+def g:Test_ToolResult_caps_long_diffs_and_output()
+  var lines = mapnew(range(40), (_, i) => '+l' .. i)
+  var r = util.ToolResult('Edit', {file_path: 'x'}, '', {structuredPatch: [{oldStart: 1, newStart: 1, lines: lines}]}, 6)
+  assert_equal(7, len(r))  # the summary and 6 diff lines, the last one a counter
+  assert_equal('… +35 lines', r[-1].text)
+  var out = util.ToolResult('Bash', {command: 'x'}, '', {stdout: join(range(30), "\n"), stderr: ''}, 12)
+  assert_equal(['0', '1', '2', '3'], mapnew(out[: 3], (_, i) => i.text))
+  assert_equal('… +26 lines', out[-1].text)
+  assert_equal('(no output)', util.ToolResult('Bash', {command: 'x'}, '', {stdout: '', stderr: ''})[0].text)
+enddef
+
+def g:Test_ToolResult_write_read_grep_todo()
+  var w = util.ToolResult('Write', {file_path: 'n.txt', content: "a\nb\n"}, '', {})
+  assert_equal(['Wrote 2 lines to n.txt', '1 + a', '2 + b'], mapnew(w, (_, i) => i.text))
+  assert_equal('Read 3 lines', util.ToolResult('Read', {file_path: 'x'}, "1\ta\n2\tb\n3\tc", {})[0].text)
+  assert_equal('Found 2 lines', util.ToolResult('Grep', {pattern: 'p'}, "a:1\nb:2", {})[0].text)
+  assert_equal('No matches', util.ToolResult('Grep', {pattern: 'p'}, '', {})[0].text)
+  assert_equal([], util.ToolResult('WebSearch', {query: 'q'}, 'text', {}))
+  var t = util.ToolResult('TodoWrite', {todos: [{content: 'A', status: 'completed'}, {content: 'B', activeForm: 'Doing B', status: 'in_progress'}, {content: 'C', status: 'pending'}]}, '', {})
+  assert_equal(['☒ A', '◼ Doing B', '☐ C'], mapnew(t, (_, i) => i.text))
+  assert_equal(['done', 'doing', 'todo'], mapnew(t, (_, i) => i.kind))
+enddef
