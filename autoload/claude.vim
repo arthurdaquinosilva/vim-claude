@@ -238,7 +238,11 @@ def SetupInputBuf()
   inoremap <buffer><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
   inoremap <buffer><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<Cmd>call claude#CycleMode()\<CR>"
   nnoremap <buffer><silent> <S-Tab> <ScriptCmd>CycleMode()<CR>
-  inoremap <buffer> <S-CR> <CR>
+  # New lines: grow the window first, then insert (see MakeRoomForNewline).
+  inoremap <buffer><silent> <S-CR> <ScriptCmd>MakeRoomForNewline()<CR><CR>
+  inoremap <buffer><silent> <C-j> <ScriptCmd>MakeRoomForNewline()<CR><CR>
+  nnoremap <buffer><silent><nowait> o <ScriptCmd>MakeRoomForNewline()<CR>o
+  nnoremap <buffer><silent><nowait> O <ScriptCmd>MakeRoomForNewline()<CR>O
   nnoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
   inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
@@ -376,13 +380,38 @@ def RefreshInput()
   # layout (e.g. the chat was just :q'd) resizing would squash its neighbours.
   for w in filter(InputWins(), (_, id) => UnderChat(id))
     var rows = util.DisplayRows(lines, winwidth(w) - 2, 0) + (border ? 1 : 0)
-    var h = min([max([rows, Opt('input_height', 1) + (border ? 1 : 0)]), Opt('input_max_height', 12)])
+    var h = min([max([rows + SpareRow(lines, border), Opt('input_height', 1) + (border ? 1 : 0)]), Opt('input_max_height', 12)])
     if winheight(w) != h
       win_execute(w, 'resize ' .. h)
     endif
     if rows <= h && line('w0', w) > 1
       # Everything fits: show it from the top instead of the scrolled view.
       win_execute(w, 'winrestview({topline: 1})')
+    endif
+  endfor
+enddef
+
+# With several lines and an empty last one (a fresh newline), Vim scrolls
+# the lines above out of view unless the window has one row to spare, because
+# of the border drawn under the last line. The row goes away once you type.
+def SpareRow(lines: list<string>, border: bool): number
+  return border && len(lines) > 1 && lines[-1] == '' ? 1 : 0
+enddef
+
+# A newline is inserted first and the window grows afterwards, so Vim scrolls
+# the new line into view in the meantime and the lines above vanish until the
+# next keystroke. Make room for the extra line before inserting it.
+def MakeRoomForNewline()
+  if !bufexists(input_buf) || pumvisible()
+    return
+  endif
+  for w in filter(InputWins(), (_, id) => UnderChat(id))
+    var lines = getbufline(input_buf, 1, '$') + ['']
+    var border = Opt('input_border', true)
+    var rows = util.DisplayRows(lines, winwidth(w) - 2, 0) + (border ? 1 : 0)
+    var h = min([max([rows + SpareRow(lines, border), Opt('input_height', 1) + (border ? 1 : 0)]), Opt('input_max_height', 12)])
+    if winheight(w) < h
+      win_execute(w, 'resize ' .. h)
     endif
   endfor
 enddef

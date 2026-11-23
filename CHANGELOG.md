@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix: starting a new line in the input box (`Ctrl-J`, Shift-Enter, `o`, `O`) no
+  longer scrolls the lines above out of view until the next keystroke. The
+  window now grows before the line is inserted and keeps a spare row while
+  the last line is empty.
 - The status bar in a narrow panel drops the model, then the context figure,
   and finally the `ctrl-c` hint, so what Claude is doing is never cut off.
 - README: a text capture of the real UI.

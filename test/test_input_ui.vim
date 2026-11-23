@@ -136,3 +136,60 @@ def g:Test_input_does_not_hard_wrap_with_global_textwidth()
   assert_equal(1, line('$'))
   set textwidth&
 enddef
+
+# Typing a newline used to leave the window scrolled to the new line, hiding
+# the lines above it until the next keystroke. (Vim wants one row to spare
+# while the last of several lines is empty, because of the border under it.)
+# The scrolling itself needs a real terminal; here we check the sizing.
+def g:Test_input_keeps_a_spare_row_while_the_last_line_is_empty()
+  claude.NewChat()
+  claude.Open()
+  var buf = claude.Debug().input_buf
+  var win = win_findbuf(buf)[0]
+  win_gotoid(win)
+  # One line, empty or not: the line and the border, nothing spare.
+  setline(1, 'first line')
+  doautocmd TextChanged
+  assert_equal(2, winheight(win))
+  # A fresh newline: two lines and the border, plus the spare row.
+  append(1, '')
+  normal! 2G
+  doautocmd TextChangedI
+  assert_equal(4, winheight(win))
+  # Typing on it takes the spare row away again.
+  setline(2, 'x')
+  doautocmd TextChangedI
+  assert_equal(3, winheight(win))
+  # The same for a third line.
+  append(2, '')
+  normal! 3G
+  doautocmd TextChangedI
+  assert_equal(5, winheight(win))
+  setline(3, 'y')
+  doautocmd TextChangedI
+  assert_equal(4, winheight(win))
+  # Without the border there is nothing to make room for.
+  g:claude_input_border = false
+  append(3, '')
+  doautocmd TextChangedI
+  assert_equal(4, winheight(win))
+  unlet g:claude_input_border
+enddef
+
+def g:Test_new_line_keys_make_room_before_inserting()
+  claude.NewChat()
+  claude.Open()
+  var buf = claude.Debug().input_buf
+  var win = win_findbuf(buf)[0]
+  win_gotoid(win)
+  setline(1, 'first line')
+  doautocmd TextChanged
+  assert_equal(2, winheight(win))
+  # <C-j> and <S-CR> are mapped to grow the window and then break the line.
+  assert_match('MakeRoomForNewline', maparg('<C-j>', 'i'))
+  assert_match('MakeRoomForNewline', maparg('<S-CR>', 'i'))
+  assert_match('MakeRoomForNewline', maparg('o', 'n'))
+  assert_match('MakeRoomForNewline', maparg('O', 'n'))
+  # Enter still sends rather than breaking the line.
+  assert_match('SubmitInput', maparg('<CR>', 'i'))
+enddef
