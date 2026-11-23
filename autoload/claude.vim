@@ -1971,7 +1971,8 @@ enddef
 export def QuoteSelection()
   var p1 = getpos("'<")
   var p2 = getpos("'>")
-  var lines = getregion(p1, p2, {type: visualmode()})
+  # (call(): the first getregion() release had a wrong argument check in Vim9)
+  var lines: list<string> = call('getregion', [p1, p2, {type: visualmode()}])
   # Drop the transcript's body indent, except where the selection started
   # mid-line (that text has no indent to drop).
   for i in range(len(lines))
@@ -2517,8 +2518,9 @@ enddef
 # :ClaudeHealth — check that the environment can run the plugin.
 export def Health()
   var rows: list<list<string>> = []
-  def Row(ok: bool, what: string, detail: string = '')
-    add(rows, [ok ? 'OK  ' : 'FAIL', what .. (detail != '' ? ': ' .. detail : '')])
+  # Optional things only warn; what the plugin cannot work without fails.
+  def Row(ok: bool, what: string, detail: string = '', critical: bool = true)
+    add(rows, [ok ? 'OK  ' : (critical ? 'FAIL' : 'WARN'), what .. (detail != '' ? ': ' .. detail : '')])
   enddef
   Row(true, 'Vim', string(v:versionlong))
   for feat in ['job', 'channel', 'timers', 'popupwin', 'textprop']
@@ -2534,14 +2536,14 @@ export def Health()
     Row(false, exe, 'not on $PATH (set g:claude_cmd)')
   endif
   Row(true, 'directory', ChatDir() .. (ChatDir() != getcwd() ? ' (the conversation started here; :ClaudeNew to follow :cd)' : ''))
-  Row(isdirectory(expand('~/.claude')) == 1, '~/.claude', 'created by `claude` on first login')
-  Row(executable('git') == 1, 'git', 'optional, used for @file completion')
+  Row(isdirectory(expand('~/.claude')) == 1, '~/.claude', 'created by `claude` on first login', false)
+  Row(executable('git') == 1, 'git', 'optional, used for @file completion', false)
   Row(true, 'process', Running() ? 'running, session ' .. (session_id == '' ? '(none yet)' : session_id) : 'not started (starts on first message)')
   if Opt('debug_log', '') != ''
     Row(true, 'g:claude_debug_log', expand(Opt('debug_log', '')))
   endif
   for [mark, text] in rows
-    echohl (mark == 'OK  ' ? 'None' : 'ErrorMsg')
+    echohl (mark == 'OK  ' ? 'None' : (mark == 'WARN' ? 'WarningMsg' : 'ErrorMsg'))
     echo mark .. ' ' .. text
     echohl None
   endfor
