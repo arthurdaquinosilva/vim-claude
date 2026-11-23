@@ -62,6 +62,8 @@ Input box:
   <C-j>          new line (also <S-CR> where the terminal supports it)
   @              fuzzy-complete a project file name (git ls-files)
   <C-p> <C-n>    previous / next sent message
+  <C-r>          search earlier messages (type, <C-r>/<C-n>/<C-p> to move,
+                 <CR> to take, <Esc> to cancel)
   <C-c>          stop Claude
   q              close the panel (normal mode)
 
@@ -82,6 +84,15 @@ with |g:claude_tool_details| and |g:claude_tool_lines|.
 The statusline shows a spinner and what Claude is doing (thinking, using a
 tool), the model, how full the context window is (ctx 12%), and the
 permission mode. A warning appears when the context is 85% full. Each reply ends with its duration.
+
+Type ahead: pressing <CR> while Claude is still working queues the message
+(shown as `⧗ Queued`, with a count in the info line). Queued messages are
+sent in order, each as its own message, as soon as Claude finishes; <C-c>
+stops the current reply and the queue carries on. |:ClaudeUnqueue| drops
+them.
+
+History is saved per project (under |g:claude_history_dir|) and loaded again
+the next time you work in that directory.
 
 The conversation is one Claude Code session; messages share context until
 |:ClaudeNew|. Earlier sessions for the current directory can be reopened with
@@ -176,6 +187,7 @@ conversation is resumed on the next message).
 :ClaudeAccept :ClaudeReject  *:ClaudeAccept* *:ClaudeReject*
 :ClaudeEditCancel            *:ClaudeEditCancel*  Cancel a running edit.
 :ClaudeStop                  *:ClaudeStop*     Interrupt the current reply.
+:ClaudeUnqueue               *:ClaudeUnqueue*  Drop messages waiting to be sent.
 :ClaudeHealth                *:ClaudeHealth*   Check Vim, the CLI and the login.
 :ClaudeNew                   *:ClaudeNew*      Start a new conversation.
 :ClaudeResume                *:ClaudeResume*   Reopen an earlier conversation.
@@ -231,6 +243,10 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_tool_details*     Show what tool calls did.       Default: v:true
 *g:claude_tool_lines*       Most lines shown under a call.  Default: 12
 *g:claude_confirm_bypass*   Ask before bypassPermissions.   Default: v:true
+*g:claude_history*          Keep input history on disk.     Default: v:true
+*g:claude_history_dir*      Where it is kept.               Default: ~/.local/state/vim-claude
+*g:claude_history_search_key* Key for history search.       Default: '<C-r>'
+*g:claude_queue_limit*      Most messages that can wait.    Default: 10
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_debug_log*        File to append the raw CLI     Default: ''

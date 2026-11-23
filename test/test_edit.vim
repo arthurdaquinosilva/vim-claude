@@ -39,7 +39,7 @@ enddef
 def g:Test_edit_error_is_reported_not_applied()
   var src = Setup()
   edit.Start(1, 1, 'FAIL')
-  sleep 1500m
+  g:WaitFor("execute('messages') =~ 'edit failed: boom'", 10000)
   assert_equal(1, tabpagenr('$'))
   assert_equal(['let a = 1', 'let x = 1', 'let b = 2'], getbufline(src, 1, '$'))
   assert_match('edit failed: boom', execute('messages'))
@@ -49,7 +49,7 @@ def g:Test_edit_discarded_if_buffer_changed_meanwhile()
   var src = Setup()
   edit.Start(2, 2, 'anything')
   setline(2, 'let x = 999')
-  sleep 1500m
+  g:WaitFor("execute('messages') =~ 'buffer changed'", 10000)
   assert_equal(1, tabpagenr('$'))
   assert_match('buffer changed', execute('messages'))
 enddef

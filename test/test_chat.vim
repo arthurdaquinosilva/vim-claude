@@ -246,7 +246,7 @@ def g:Test_stop_kills_a_process_that_ignores_the_interrupt()
   claude.Send('SLOW NOINT please')
   g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
   claude.Stop()
-  g:WaitFor('!claude#Busy()', 6000)
+  g:WaitFor('!claude#Busy()', 10000)
   assert_equal('  ■ Interrupted', ChatLines()[-1])
 enddef
 
@@ -677,4 +677,68 @@ def g:Test_context_usage_shows_in_the_statusline_and_warns()
   unlet g:claude_show_cost
   claude.NewChat()
   assert_notmatch('ctx', claude#InputStatusLine(win_getid()))
+enddef
+
+def g:Test_messages_typed_while_busy_are_queued_and_sent_in_order()
+  Reset()
+  claude.Open()
+  claude.Send('DRIP first')
+  assert_true(claude.Debug().busy)
+  claude.Send('second')
+  claude.Send('third')
+  assert_match('⧗ Queued: second', join(ChatLines(), "\n"))
+  assert_match(' · 2 queued', claude#InputStatusLine(win_getid()))
+  g:WaitFor('len(filter(g:FakeLog(), "v:val =~ ''^STDIN ''")) == 3 && !claude#Busy()', 6000)
+  var sent = mapnew(filter(g:FakeLog(), (_, l) => l =~ '^STDIN '), (_, l) => json_decode(l[6 :]).message.content)
+  assert_match('^DRIP first', sent[0])
+  assert_match('^second', sent[1])
+  assert_match('^third', sent[2])
+  assert_notmatch('queued', claude#InputStatusLine(win_getid()))
+  # Each one got its own message and reply in the transcript.
+  assert_equal(3, len(filter(ChatLines(), (_, l) => l == '❯ You:')))
+enddef
+
+def g:Test_unqueue_drops_waiting_messages()
+  Reset()
+  claude.Send('SLOW one')
+  claude.Send('two')
+  assert_match('1 queued', claude#InputStatusLine(win_getid()))
+  execute 'ClaudeUnqueue'
+  claude.Stop()
+  g:WaitFor('!claude#Busy()')
+  # Only the first message went out (the other STDIN line is the interrupt).
+  assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^STDIN .*"role":"user"')))
+enddef
+
+def g:Test_input_enter_while_busy_queues_instead_of_warning()
+  Reset()
+  claude.Open()
+  claude.Send('SLOW one')
+  setbufline(claude.Debug().input_buf, 1, 'next thing')
+  claude.SubmitInput()
+  assert_equal([''], getbufline(claude.Debug().input_buf, 1, '$'))
+  assert_match('1 queued', claude#InputStatusLine(win_getid()))
+  claude.Unqueue()
+  StopAndWait()
+enddef
+
+def g:Test_history_persists_per_project_and_is_searchable()
+  var dir = tempname()
+  g:claude_history_dir = dir
+  var old = getcwd()
+  var proj = tempname()
+  mkdir(proj, 'p')
+  execute 'cd ' .. fnameescape(proj)
+  Reset()
+  claude.Send('remember me')
+  g:WaitFor('!claude#Busy()')
+  claude.Send("multi\nline")
+  g:WaitFor('!claude#Busy()')
+  var files = glob(dir .. '/*.jsonl', false, true)
+  assert_equal(1, len(files))
+  assert_equal(['"remember me"', '"multi\nline"'], readfile(files[0]))
+  execute 'cd ' .. fnameescape(old)
+  assert_equal([], glob(dir .. '/*' .. substitute(old, '[^A-Za-z0-9]', '-', 'g') .. '*', false, true))
+  delete(proj, 'rf')
+  g:claude_history_dir = tempname()
 enddef

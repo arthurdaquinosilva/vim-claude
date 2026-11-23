@@ -61,6 +61,9 @@ var fence_n = 0
 
 var history: list<string> = []
 var hist_idx = -1
+var hist_loaded = false
+var hist_cwd = ''
+var queue: list<dict<string>> = []      # messages typed while Claude was busy
 var file_cache: list<string> = []
 
 def Opt(name: string, default: any): any
@@ -226,6 +229,11 @@ def SetupInputBuf()
   inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
+  var sk = Opt('history_search_key', '<C-r>')
+  if sk != ''
+    execute 'inoremap <buffer><silent> ' .. sk .. ' <ScriptCmd>SearchHistory()<CR>'
+    execute 'nnoremap <buffer><silent> ' .. sk .. ' <ScriptCmd>SearchHistory()<CR>'
+  endif
   inoremap <buffer><silent> <C-p> <ScriptCmd>History(-1)<CR>
   inoremap <buffer><silent> <C-n> <ScriptCmd>History(1)<CR>
   nnoremap <buffer><silent> <C-p> <ScriptCmd>History(-1)<CR>
@@ -338,7 +346,7 @@ def RefreshInput()
   sign_unplace('claude_input', {buffer: input_buf})
   sign_place(0, 'claude_input', 'ClaudePrompt', input_buf, {lnum: 1})
   if n == 1 && getbufline(input_buf, 1)[0] == ''
-    var hint = busy ? 'Claude is working…' : 'Ask Claude…'
+    var hint = busy ? 'Claude is working… (Enter queues your message)' : 'Ask Claude…'
     prop_add(1, 0, {bufnr: input_buf, type: 'claude_placeholder', text: hint, text_align: 'after'})
   endif
   # Bottom border: a rule drawn under the last line (after the sign column,
@@ -392,6 +400,9 @@ export def InputStatusLine(winid: number = 0): string
   var left: list<list<string>> = []
   if busy
     left = [['ctrl-c', 'ClaudeKey'], [' to stop', '']]
+    if !empty(queue)
+      left += [[' · ' .. len(queue) .. ' queued', 'ClaudeChip']]
+    endif
   else
     var ctx = get(g:, 'claude_last_ctx', {})
     if Opt('include_context', true) && !empty(ctx) && get(ctx, 'file', '') != ''
@@ -871,6 +882,9 @@ def FinishTurn()
   ClearInterrupt()
   tool_calls = {}
   SetBusy(false)
+  if !empty(queue)
+    timer_start(0, (_) => DrainQueue())
+  endif
   if touched_files
     touched_files = false
     # Reload files Claude edited; buffers with unsaved changes still prompt.
@@ -1514,8 +1528,10 @@ def MentionLines(path: string, l1: number, l2: number): list<string>
 enddef
 
 def Remember(text: string)
+  LoadHistory()
   if empty(history) || history[-1] != text
     add(history, text)
+    SaveHistory(text)
   endif
   hist_idx = -1
 enddef
@@ -1586,7 +1602,7 @@ export def Send(text: string, display: string = '')
     return
   endif
   if busy
-    Warn('Claude is still responding — press Ctrl-C in the panel to stop it')
+    Enqueue(text, display)
     return
   endif
   EnsureChatBuf()
@@ -1607,6 +1623,7 @@ export def Send(text: string, display: string = '')
   # A command's arguments must stay exactly as typed: no editor context.
   if !SendRaw(util.ExpandMentions(text, MentionLines) .. (empty(slash) ? EditorContext() : ''))
     Info('✖ Not sent')
+    queue = []
   endif
 enddef
 
@@ -1615,15 +1632,164 @@ export def SubmitInput()
   if trim(text) == ''
     return
   endif
-  if busy
-    Warn('Claude is still responding — Ctrl-C to stop')
-    return
-  endif
   deletebufline(input_buf, 1, '$')
   Send(trim(text, "\n"))
 enddef
 
+# Typed while Claude is working: sent, in order, as soon as it is done.
+def Enqueue(text: string, display: string)
+  if len(queue) >= Opt('queue_limit', 10)
+    Warn('too many queued messages (:ClaudeUnqueue clears them)')
+    return
+  endif
+  add(queue, {text: text, display: display})
+  Remember(text)
+  EnsureChatBuf()
+  Info('⧗ Queued: ' .. strcharpart(substitute(split(text, "\n")[0], '\s\+', ' ', 'g'), 0, 60))
+  RefreshInput()
+  redrawstatus!
+enddef
+
+export def Unqueue()
+  var n = len(queue)
+  queue = []
+  RefreshInput()
+  redrawstatus!
+  echo 'claude: dropped ' .. n .. ' queued message' .. (n == 1 ? '' : 's')
+enddef
+
+def DrainQueue()
+  if busy || empty(queue)
+    return
+  endif
+  var next = remove(queue, 0)
+  Send(next.text, next.display)
+enddef
+
+# ---- input history, kept per project between Vim sessions
+
+def HistoryFile(): string
+  if !Opt('history', true)
+    return ''
+  endif
+  var dir = Opt('history_dir', '')
+  if dir == ''
+    dir = (empty($XDG_STATE_HOME) ? expand('~/.local/state') : $XDG_STATE_HOME) .. '/vim-claude'
+  endif
+  return expand(dir) .. '/' .. util.ProjectKey(getcwd()) .. '.jsonl'
+enddef
+
+def LoadHistory()
+  # Another project (after :cd) has its own history.
+  if hist_loaded && hist_cwd == getcwd()
+    return
+  endif
+  hist_loaded = true
+  hist_cwd = getcwd()
+  hist_idx = -1
+  history = []
+  var f = HistoryFile()
+  if f == '' || !filereadable(f)
+    return
+  endif
+  var entries: list<string> = []
+  for l in readfile(f)
+    try
+      var t = json_decode(l)
+      if type(t) == v:t_string && t != ''
+        add(entries, t)
+      endif
+    catch
+    endtry
+  endfor
+  if len(entries) > 1000
+    # Keep the file from growing for ever.
+    entries = entries[-500 :]
+    silent! writefile(mapnew(entries, (_, e) => json_encode(e)), f)
+  endif
+  history = entries
+enddef
+
+def SaveHistory(text: string)
+  var f = HistoryFile()
+  if f == ''
+    return
+  endif
+  silent! mkdir(fnamemodify(f, ':h'), 'p', 0o700)
+  silent! writefile([json_encode(text)], f, 'a')
+enddef
+
+# Ctrl-R in the input box: type to filter earlier messages, <C-r>/<C-n> and
+# <C-p> (or the arrows) to move, <CR> to take one, <Esc> to cancel.
+def SearchHistory()
+  LoadHistory()
+  if empty(history) || !exists('*popup_create')
+    return
+  endif
+  var all = reverse(copy(history))
+  var query = ''
+  var hits: list<string> = []
+  var sel = 0
+  var popup = 0
+  var Draw = () => {
+    hits = query == '' ? all[: 9] : matchfuzzy(all, query, {limit: 10})
+    sel = min([sel, max([len(hits) - 1, 0])])
+    var rows = mapnew(hits, (_, h) => {
+      var first = substitute(split(h, "\n", 1)[0], '\s\+', ' ', 'g')
+      return strcharpart(first, 0, 90) .. (stridx(h, "\n") >= 0 ? ' ↵' : '')
+    })
+    popup_settext(popup, ['(search) ' .. query .. '█', ''] + (empty(rows) ? ['  no match'] : rows))
+    win_execute(popup, 'call cursor(' .. (sel + 3) .. ', 1)')
+  }
+  popup = popup_create([''], {
+    title: ' History ', padding: [0, 1, 0, 1], border: [], pos: 'center', zindex: 200,
+    minwidth: 50, maxwidth: float2nr(&columns * 0.85), cursorline: true, mapping: false,
+    filter: (id, key) => {
+      if key == "\<Esc>" || key == "\<C-c>"
+        popup_close(id)
+      elseif key == "\<CR>" || key == "\<NL>"
+        popup_close(id)
+        if !empty(hits)
+          SetInputText(hits[sel])
+        endif
+      elseif key == "\<C-r>" || key == "\<C-n>" || key == "\<Down>"
+        sel = min([sel + 1, len(hits) - 1])
+        Draw()
+      elseif key == "\<C-p>" || key == "\<Up>"
+        sel = max([sel - 1, 0])
+        Draw()
+      elseif key == "\<BS>" || key == "\<C-h>"
+        query = strcharpart(query, 0, max([strchars(query) - 1, 0]))
+        sel = 0
+        Draw()
+      elseif key == "\<C-u>"
+        query = ''
+        sel = 0
+        Draw()
+      elseif strlen(key) >= 1 && key !~ '^\%x80' && char2nr(key) >= 32
+        query ..= key
+        sel = 0
+        Draw()
+      endif
+      return true
+    },
+  })
+  Draw()
+enddef
+
+def SetInputText(text: string)
+  deletebufline(input_buf, 1, '$')
+  setbufline(input_buf, 1, split(text, "\n", 1))
+  RefreshInput()
+  if win_getid() != get(InputWins(), 0, -1) && !empty(InputWins())
+    win_gotoid(InputWins()[0])
+  endif
+  normal! G$
+  startinsert!
+enddef
+
 def History(dir: number)
+  LoadHistory()
   if empty(history)
     return
   endif
@@ -1790,6 +1956,7 @@ export def NewChat()
   SetBusy(false)
   ctx_used = 0
   session_cost = 0.0
+  queue = []
   session_id = ''
   model_name = ''
   session_allowed = []

@@ -45,6 +45,7 @@ command! -nargs=0 ClaudeNew claude.NewChat()
 command! -nargs=0 ClaudeStop claude.Stop()
 command! -nargs=0 ClaudeResume claude.Resume()
 command! -nargs=0 ClaudeHealth claude.Health()
+command! -nargs=0 ClaudeUnqueue claude.Unqueue()
 command! -nargs=? -complete=custom,claude#CompleteModels ClaudeModel claude.SetModel(<q-args>)
 command! -nargs=? -complete=custom,claude#CompleteModes ClaudeMode claude.SetMode(<q-args>)
 

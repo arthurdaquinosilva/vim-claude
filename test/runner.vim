@@ -8,6 +8,7 @@ syntax on
 runtime plugin/claude.vim
 let g:claude_cmd = s:root .. '/test/fake_claude.sh'
 let $FAKE_CLAUDE_LOG = tempname()
+let g:claude_history_dir = tempname()
 
 func g:WaitFor(expr, ...) abort
   let l:timeout = get(a:, 1, 3000)

@@ -40,7 +40,10 @@ run commands when you allow it, and keep context across messages.
   `/permissions`, `/resume`, `/help` and `/exit` are handled by the plugin.
 - **Session management.** `:ClaudeNew`, `:ClaudeResume` (picks from earlier
   sessions in this directory), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`.
-- **Input history.** `Ctrl-P` and `Ctrl-N` in the input box.
+- **Type ahead.** Messages sent while Claude is working are queued and go
+  out in order when it finishes (`:ClaudeUnqueue` drops them).
+- **Input history.** `Ctrl-P` and `Ctrl-N` step through earlier messages and
+  `Ctrl-R` searches them. History is kept per project between Vim sessions.
 
 ## Install
 

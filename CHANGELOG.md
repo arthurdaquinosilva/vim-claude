@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Type ahead: messages sent while Claude is busy are queued and sent in order
+  (`:ClaudeUnqueue` clears them).
+- Input history is saved per project between Vim sessions, and `Ctrl-R`
+  searches it (`g:claude_history`, `g:claude_history_dir`).
+
 - Model and permission-mode changes apply to the running session (no restart,
   no lost prompt cache). Shift-Tab cycles the mode; bypassPermissions asks
   for confirmation.
