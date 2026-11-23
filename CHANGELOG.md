@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `:ClaudeContinue` and `:ClaudeFork` (`/continue`, `/fork`). A conversation
+  stays in the directory it started in; a `:cd` no longer moves it.
+- `@` completion also offers directories.
+
 - `:ClaudeRewind` (`<Leader>cu`, `/rewind`): restore files to before any
   message of the session, with a preview of what changes. Uses the CLI's own
   file checkpoints (`g:claude_checkpoints`).

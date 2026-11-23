@@ -795,3 +795,110 @@ def g:Test_rewind_is_refused_while_busy_or_without_checkpoints()
   assert_match('checkpoints are off', execute('messages'))
   unlet g:claude_checkpoints
 enddef
+
+def Cwds(): list<string>
+  return mapnew(filter(g:FakeLog(), (_, l) => l =~ '^CWD '), (_, l) => l[4 :])
+enddef
+
+def g:Test_conversation_stays_in_its_directory_after_cd()
+  var a = resolve(tempname() .. '-a')
+  var b = resolve(tempname() .. '-b')
+  mkdir(a, 'p')
+  mkdir(b, 'p')
+  var old = getcwd()
+  execute 'cd ' .. fnameescape(a)
+  Reset()
+  claude.Send('one')
+  g:WaitFor('!claude#Busy()')
+  execute 'cd ' .. fnameescape(b)
+  claude.Send('two')
+  g:WaitFor('!claude#Busy()')
+  # Same process, same directory: a :cd does not drag Claude to another project.
+  assert_equal([a], Cwds())
+  # A new conversation follows the current directory.
+  var health = execute('ClaudeHealth')   # (runs the CLI with --version, which logs too)
+  assert_match('directory: ' .. a .. ' (the conversation started here', health)
+  writefile([], $FAKE_CLAUDE_LOG)
+  claude.NewChat()
+  claude.Send('three')
+  g:WaitFor('!claude#Busy()')
+  assert_equal([b], Cwds())
+  execute 'cd ' .. fnameescape(old)
+  delete(a, 'rf')
+  delete(b, 'rf')
+enddef
+
+def g:Test_fork_starts_a_new_session_from_the_current_one()
+  Reset()
+  claude.Fork()
+  assert_match('nothing to fork yet', execute('messages'))
+  claude.Send('one')
+  g:WaitFor('!claude#Busy()')
+  claude.Fork()
+  assert_match('⑂ Forked', join(ChatLines(), "\n"))
+  claude.Send('two')
+  g:WaitFor('!claude#Busy()')
+  var args = filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')
+  assert_equal(2, len(args))
+  assert_match('--resume 11111111-2222-3333-4444-555555555555 --fork-session', args[1])
+  # Only that one process forks; a later restart resumes normally.
+  claude.SetMode('plan')
+  g:claude_extra_args = ['--x']
+  claude.Send('three')
+  g:WaitFor('!claude#Busy()')
+  unlet g:claude_extra_args
+  claude.SetMode('default')
+  args = filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')
+  assert_notmatch('--fork-session', args[2])
+enddef
+
+def g:Test_continue_loads_the_latest_conversation_here()
+  var home = tempname()
+  var proj = resolve(tempname() .. '-proj')
+  mkdir(proj, 'p')
+  var old_home = $HOME
+  var old = getcwd()
+  $HOME = home
+  execute 'cd ' .. fnameescape(proj)
+  var dir = home .. '/.claude/projects/' .. substitute(proj, '[^A-Za-z0-9]', '-', 'g')
+  mkdir(dir, 'p')
+  writefile([
+    json_encode({type: 'user', message: {role: 'user', content: 'older question'}}),
+    json_encode({type: 'assistant', message: {content: [{type: 'text', text: 'older answer'}]}})], dir .. '/aaaa.jsonl')
+  sleep 1100m
+  writefile([
+    json_encode({type: 'user', message: {role: 'user', content: 'the latest question'}}),
+    json_encode({type: 'assistant', message: {content: [{type: 'text', text: 'the latest answer'}]}})], dir .. '/bbbb.jsonl')
+  Reset()
+  claude.Continue()
+  var chat = join(ChatLines(), "\n")
+  assert_match('the latest question', chat)
+  assert_match('the latest answer', chat)
+  assert_notmatch('older', chat)
+  assert_match('resumed session bbbb', chat)
+  claude.Send('and more')
+  g:WaitFor('!claude#Busy()')
+  assert_match('--resume bbbb', filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')[0])
+  assert_equal([proj], Cwds())
+  $HOME = old_home
+  execute 'cd ' .. fnameescape(old)
+  delete(proj, 'rf')
+  delete(home, 'rf')
+  claude.Continue()   # nothing for this directory
+enddef
+
+def g:Test_mentions_complete_directories_too()
+  var proj = resolve(tempname() .. '-proj')
+  mkdir(proj .. '/src/deep', 'p')
+  writefile(['x'], proj .. '/src/deep/a.txt')
+  writefile(['x'], proj .. '/top.txt')
+  var old = getcwd()
+  execute 'cd ' .. fnameescape(proj)
+  claude.NewChat()
+  var words = claude#CompleteMention(0, 'src')
+  execute 'cd ' .. fnameescape(old)
+  delete(proj, 'rf')
+  # The files, and every directory above them.
+  assert_equal(['src/deep/', 'src/deep/a.txt'], sort(filter(copy(words.words), (_, w) => w =~ '^src/deep')))
+  assert_true(index(words.words, 'src/') >= 0)
+enddef

@@ -39,7 +39,9 @@ run commands when you allow it, and keep context across messages.
   custom commands and skills, with their descriptions. `/clear`, `/model`,
   `/permissions`, `/resume`, `/help` and `/exit` are handled by the plugin.
 - **Session management.** `:ClaudeNew`, `:ClaudeResume` (picks from earlier
-  sessions in this directory), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`.
+  sessions in this directory), `:ClaudeContinue` (the latest one), `:ClaudeFork`
+  (branch into a new session), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`. A
+  conversation stays in the directory it started in, whatever you `:cd` to.
 - **Rewind.** `:ClaudeRewind` (`<Leader>cu`, or `/rewind`) restores your files
   to how they were before any message of the session, after showing which
   files would change. The conversation is kept.

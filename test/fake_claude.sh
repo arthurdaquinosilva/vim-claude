@@ -2,6 +2,7 @@
 # Stand-in for the `claude` CLI used by the tests. Emits canned stream-json.
 log="${FAKE_CLAUDE_LOG:-/dev/null}"
 printf '%s\n' "ARGS $*" >> "$log"
+printf '%s\n' "CWD $PWD" >> "$log"
 sid="11111111-2222-3333-4444-555555555555"
 
 if [[ " $* " != *" --input-format "* ]]; then

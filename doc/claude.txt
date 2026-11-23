@@ -60,7 +60,7 @@ Input box:
                  @file menu is open
   <Tab>          next item in the @file menu
   <C-j>          new line (also <S-CR> where the terminal supports it)
-  @              fuzzy-complete a project file name (git ls-files)
+  @              fuzzy-complete a project file or directory (git ls-files)
   <C-p> <C-n>    previous / next sent message
   <C-r>          search earlier messages (type, <C-r>/<C-n>/<C-p> to move,
                  <CR> to take, <Esc> to cancel)
@@ -99,6 +99,12 @@ them.
 
 History is saved per project (under |g:claude_history_dir|) and loaded again
 the next time you work in that directory.
+
+A conversation works in the directory it started in until |:ClaudeNew|: a
+|:cd| (or 'autochdir') in between does not move Claude to another project.
+|:ClaudeContinue| reopens the latest conversation of the current directory;
+|:ClaudeFork| makes the next message continue in a new session that starts
+with everything said so far, leaving the original untouched.
 
 The conversation is one Claude Code session; messages share context until
 |:ClaudeNew|. Earlier sessions for the current directory can be reopened with
@@ -198,6 +204,8 @@ conversation is resumed on the next message).
 :ClaudeHealth                *:ClaudeHealth*   Check Vim, the CLI and the login.
 :ClaudeNew                   *:ClaudeNew*      Start a new conversation.
 :ClaudeResume                *:ClaudeResume*   Reopen an earlier conversation.
+:ClaudeContinue              *:ClaudeContinue* Reopen the latest conversation here.
+:ClaudeFork                  *:ClaudeFork*     Branch into a new session.
 :ClaudeModel [name]          *:ClaudeModel*    opus, sonnet, haiku, default,
                                                or any model id.
 :ClaudeMode [mode]           *:ClaudeMode*     default, acceptEdits, plan,

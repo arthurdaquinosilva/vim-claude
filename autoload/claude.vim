@@ -63,10 +63,18 @@ var history: list<string> = []
 var hist_idx = -1
 var hist_loaded = false
 var hist_cwd = ''
+var chat_cwd = ''                       # where the conversation runs; fixed until :ClaudeNew
+var fork_next = false                   # start the next process with --fork-session
 var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for rewinding
 var rewind_cbs: dict<func(dict<any>)> = {}
 var queue: list<dict<string>> = []      # messages typed while Claude was busy
 var file_cache: list<string> = []
+
+# The directory the conversation works in. A :cd (or 'autochdir') after it
+# started does not move Claude to another project in the middle of a chat.
+def ChatDir(): string
+  return chat_cwd != '' ? chat_cwd : getcwd()
+enddef
 
 def Opt(name: string, default: any): any
   return get(g:, 'claude_' .. name, default)
@@ -792,6 +800,9 @@ def BuildArgs(): list<string>
   endif
   if session_id != ''
     args += ['--resume', session_id]
+    if fork_next
+      args += ['--fork-session']
+    endif
   endif
   args += Opt('extra_args', [])
   if !empty(session_allowed)
@@ -837,9 +848,12 @@ def EnsureProcess(): bool
   StopProcess()
   gen += 1
   var g = gen
+  if chat_cwd == ''
+    chat_cwd = getcwd()
+  endif
   stderr_tail = []
   job = job_start(BuildArgs(), {
-    out_mode: 'nl', err_mode: 'nl', noblock: true, cwd: getcwd(),
+    out_mode: 'nl', err_mode: 'nl', noblock: true, cwd: ChatDir(),
     env: Opt('checkpoints', true) ? {CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1'} : {},
     out_cb: (_, msg) => {
       if g == gen
@@ -862,6 +876,7 @@ def EnsureProcess(): bool
     return false
   endif
   proc_sig = sig
+  fork_next = false
   return true
 enddef
 
@@ -1585,6 +1600,10 @@ def RunSlash(name: string, args: string, text: string): bool
     Resume()
   elseif name == 'rewind'
     Rewind()
+  elseif name == 'continue'
+    Continue()
+  elseif name == 'fork'
+    Fork()
   elseif name == 'exit' || name == 'quit'
     Close()
   elseif name == 'help'
@@ -1699,16 +1718,16 @@ def HistoryFile(): string
   if dir == ''
     dir = (empty($XDG_STATE_HOME) ? expand('~/.local/state') : $XDG_STATE_HOME) .. '/vim-claude'
   endif
-  return expand(dir) .. '/' .. util.ProjectKey(getcwd()) .. '.jsonl'
+  return expand(dir) .. '/' .. util.ProjectKey(ChatDir()) .. '.jsonl'
 enddef
 
 def LoadHistory()
   # Another project (after :cd) has its own history.
-  if hist_loaded && hist_cwd == getcwd()
+  if hist_loaded && hist_cwd == ChatDir()
     return
   endif
   hist_loaded = true
-  hist_cwd = getcwd()
+  hist_cwd = ChatDir()
   hist_idx = -1
   history = []
   var f = HistoryFile()
@@ -1981,6 +2000,9 @@ export def NewChat()
   session_cost = 0.0
   queue = []
   turns = []
+  chat_cwd = ''
+  fork_next = false
+  file_cache = []
   session_id = ''
   model_name = ''
   session_allowed = []
@@ -2059,17 +2081,26 @@ export def CompleteModels(..._): string
   return join(['default', 'opus', 'sonnet', 'haiku'], "\n")
 enddef
 
-export def Resume()
+# Earlier conversations in this directory, newest first.
+def ProjectSessions(max: number): list<dict<any>>
   var dir = expand('~/.claude/projects/') .. util.ProjectKey(getcwd())
   var files = glob(dir .. '/*.jsonl', false, true)
   sort(files, (a, b) => getftime(b) - getftime(a))
   var items: list<dict<any>> = []
-  for f in files[: 29]
+  for f in files
     var title = util.TranscriptTitle(readfile(f, '', 400))
     if title != ''
       add(items, {file: f, title: strftime('%m-%d %H:%M', getftime(f)) .. '  ' .. title})
+      if len(items) >= max
+        break
+      endif
     endif
   endfor
+  return items
+enddef
+
+export def Resume()
+  var items = ProjectSessions(30)
   if empty(items)
     Warn('no previous conversations for ' .. getcwd())
     return
@@ -2083,8 +2114,36 @@ export def Resume()
     }})
 enddef
 
+# Pick up where you left off: the most recent conversation in this directory.
+export def Continue()
+  var items = ProjectSessions(1)
+  if empty(items)
+    Warn('no previous conversations for ' .. getcwd())
+    return
+  endif
+  LoadSession(items[0].file)
+enddef
+
+# Branch the conversation: the next message continues in a new session that
+# starts with everything said so far; the original stays as it was.
+export def Fork()
+  if session_id == ''
+    Warn('nothing to fork yet: send a message first')
+    return
+  endif
+  if busy
+    Warn('wait for the reply to finish (or stop it) before forking')
+    return
+  endif
+  fork_next = true
+  StopProcess()
+  proc_sig = ''
+  Info('⑂ Forked: your next message continues in a new session; the original is untouched')
+enddef
+
 def LoadSession(file: string)
   NewChat()
+  chat_cwd = getcwd()
   session_id = fnamemodify(file, ':t:r')
   Open(false)
   for e in util.ParseTranscript(readfile(file))
@@ -2126,16 +2185,28 @@ enddef
 
 def ProjectFiles(): list<string>
   if empty(file_cache)
+    var dir = ChatDir()
     if executable('git')
-      file_cache = systemlist('git ls-files --cached --others --exclude-standard 2>/dev/null')
+      file_cache = systemlist('git -C ' .. shellescape(dir) .. ' ls-files --cached --others --exclude-standard 2>/dev/null')
       if v:shell_error != 0
         file_cache = []
       endif
     endif
     if empty(file_cache)
-      file_cache = filter(glob('**/*', false, true), (_, f) => !isdirectory(f))
+      var prefix = len(dir) + 1
+      file_cache = filter(mapnew(globpath(dir, '**/*', false, true), (_, f) => f[prefix :]), (_, f) => !isdirectory(dir .. '/' .. f))
     endif
     file_cache = file_cache[: 20000]
+    # Directories can be mentioned too: Claude lists what is in them.
+    var dirs: dict<bool> = {}
+    for f in file_cache
+      var d = fnamemodify(f, ':h')
+      while d != '.' && d != '/' && !has_key(dirs, d)
+        dirs[d] = true
+        d = fnamemodify(d, ':h')
+      endwhile
+    endfor
+    file_cache += mapnew(sort(keys(dirs)), (_, d) => d .. '/')
   endif
   return file_cache
 enddef
@@ -2349,6 +2420,7 @@ export def Health()
   else
     Row(false, exe, 'not on $PATH (set g:claude_cmd)')
   endif
+  Row(true, 'directory', ChatDir() .. (ChatDir() != getcwd() ? ' (the conversation started here; :ClaudeNew to follow :cd)' : ''))
   Row(isdirectory(expand('~/.claude')) == 1, '~/.claude', 'created by `claude` on first login')
   Row(executable('git') == 1, 'git', 'optional, used for @file completion')
   Row(true, 'process', Running() ? 'running, session ' .. (session_id == '' ? '(none yet)' : session_id) : 'not started (starts on first message)')
