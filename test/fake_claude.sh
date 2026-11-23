@@ -16,7 +16,7 @@ if [[ " $* " != *" --input-format "* ]]; then
   exit 0
 fi
 
-echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\",\"model\":\"fake-model\"}"
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\",\"model\":\"fake-model\",\"slash_commands\":[\"hi\",\"clear\",\"compact\",\"cost\",\"model\",\"__internal\"]}"
 se() { echo "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"event\":$1}"; }
 while IFS= read -r line; do
   printf '%s\n' "STDIN $line" >> "$log"
@@ -33,6 +33,13 @@ while IFS= read -r line; do
         echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":null,"permission_denials":[]}'
       fi
     fi
+    continue
+  fi
+  if [[ "$line" == *'"content":"/compact'* ]]; then
+    echo '{"type":"system","subtype":"status","status":"compacting","session_id":"x"}'
+    sleep 0.2
+    echo '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":19123,"post_tokens":6673}}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"","permission_denials":[]}'
     continue
   fi
   if [[ "$line" == *TOOLS* ]]; then

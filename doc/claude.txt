@@ -38,6 +38,23 @@ two rules; the top one shows what Claude is doing while it works. Below,
 file Claude will be told you are looking at, and the model and permission
 mode (or how to stop Claude while it is busy).
 
+Slash commands: type `/` at the start of the message and a menu lists every
+command the CLI reported (built-ins, custom commands from `.claude/commands`
+and `~/.claude/commands`, and skills), with their descriptions. Commands are
+sent exactly as typed, without the editor context. The plugin handles these
+itself, since the CLI cannot without a terminal:
+
+  /clear /new        new conversation        |:ClaudeNew|
+  /model [name]      choose the model        |:ClaudeModel|
+  /permissions /mode choose the permission mode |:ClaudeMode|
+  /resume            reopen a conversation   |:ClaudeResume|
+  /help              list the commands
+  /exit /quit        close the panel
+
+Others, such as `/compact` and `/context`, run in the CLI and show their
+result in the transcript. A command the CLI does not know is refused and left
+in the input; start the message with a space to send it as plain text.
+
 Input box:
   <CR>           send (insert and normal mode); picks the item if the
                  @file menu is open

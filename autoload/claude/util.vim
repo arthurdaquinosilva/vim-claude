@@ -139,6 +139,69 @@ export def DenialRule(denial: dict<any>): string
   return name
 enddef
 
+# ---- slash commands
+
+# Handled by the plugin itself (the CLI can't do them without a terminal).
+export const LOCAL_COMMANDS = ['clear', 'new', 'model', 'permissions', 'mode', 'resume', 'help', 'exit', 'quit']
+# Used until the CLI has told us what it supports.
+export const BASIC_COMMANDS = ['clear', 'compact', 'context', 'cost', 'usage', 'init', 'model',
+  'permissions', 'resume', 'help', 'exit', 'security-review']
+const FIRST_COMMANDS = ['clear', 'compact', 'context', 'cost', 'model', 'permissions', 'resume', 'init', 'help', 'exit']
+export const COMMAND_DESCRIPTIONS = {
+  clear: 'Start a new conversation', new: 'Start a new conversation',
+  compact: 'Summarize the conversation to free up context',
+  context: 'Show context window usage', cost: 'Show session cost and usage', usage: 'Show usage limits',
+  init: 'Create a CLAUDE.md for this project', model: 'Choose the model',
+  permissions: 'Choose the permission mode', mode: 'Choose the permission mode',
+  resume: 'Reopen an earlier conversation', help: 'List the available commands',
+  exit: 'Close the panel', quit: 'Close the panel',
+  'security-review': 'Review pending changes for security issues',
+}
+
+# "/name args" -> [name, args]; [] when the text isn't a command (a path such
+# as /etc/hosts, or a leading space, is plain text).
+export def ParseSlash(text: string): list<string>
+  var m = matchlist(text, '^/\([A-Za-z][A-Za-z0-9_:.-]*\)\%(\s\+\(.*\)\)\=$')
+  return empty(m) ? [] : [m[1], trim(m[2])]
+enddef
+
+# Completion items for "/base": names starting with it first, then fuzzy
+# matches; with nothing typed yet, the everyday commands lead.
+export def SlashMatches(names: list<string>, descs: dict<string>, base: string): list<dict<any>>
+  var pool = uniq(sort(filter(copy(names), (_, n) => n !~ '^__')))
+  var hits: list<string>
+  if base == ''
+    hits = filter(copy(FIRST_COMMANDS), (_, n) => index(pool, n) >= 0)
+    hits += filter(copy(pool), (_, n) => index(hits, n) < 0)
+  else
+    var low = tolower(base)
+    var pre = filter(copy(pool), (_, n) => stridx(tolower(n), low) == 0)
+    hits = pre + filter(matchfuzzy(pool, base), (_, n) => index(pre, n) < 0)
+  endif
+  return mapnew(hits[: 99], (_, n) => ({word: '/' .. n, abbr: '/' .. n, menu: get(descs, n, '')}))
+enddef
+
+# A key from the "---" block at the top of a command or skill file.
+export def Frontmatter(lines: list<string>, key: string): string
+  if empty(lines) || lines[0] !~ '^---\s*$'
+    return ''
+  endif
+  for l in lines[1 :]
+    if l =~ '^---\s*$'
+      break
+    endif
+    var m = matchlist(l, '^' .. key .. ':\s*\(.\{-}\)\s*$')
+    if !empty(m)
+      var v = substitute(m[1], '^\([''"]\)\(.*\)\1$', '\2', '')
+      if v =~ '^[>|][+-]\=$'
+        return ''  # a multi-line value: not worth a menu column
+      endif
+      return strcharlen(v) > 60 ? strcharpart(v, 0, 59) .. '…' : v
+    endif
+  endfor
+  return ''
+enddef
+
 # ---- what a finished tool call shows in the transcript
 
 export def ResultText(content: any): string

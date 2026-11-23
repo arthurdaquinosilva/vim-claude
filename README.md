@@ -29,6 +29,10 @@ run commands when you allow it, and keep context across messages.
   show what Claude did, with the result under each: numbered diffs for edits,
   the first lines of command output, line counts for reads and todo
   checklists. The statusline has a spinner, the model and the permission mode.
+- **Slash commands.** Type `/` for a completion menu of everything the CLI
+  supports: built-ins such as `/compact`, `/context` and `/init`, plus your
+  custom commands and skills, with their descriptions. `/clear`, `/model`,
+  `/permissions`, `/resume`, `/help` and `/exit` are handled by the plugin.
 - **Session management.** `:ClaudeNew`, `:ClaudeResume` (picks from earlier
   sessions in this directory), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`.
 - **Input history.** `Ctrl-P` and `Ctrl-N` in the input box.

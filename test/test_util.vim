@@ -319,3 +319,36 @@ def g:Test_ToolResult_write_read_grep_todo()
   assert_equal(['☒ A', '◼ Doing B', '☐ C'], mapnew(t, (_, i) => i.text))
   assert_equal(['done', 'doing', 'todo'], mapnew(t, (_, i) => i.kind))
 enddef
+
+def g:Test_ParseSlash()
+  assert_equal(['compact', ''], util.ParseSlash('/compact'))
+  assert_equal(['hi', 'Bob and Ann'], util.ParseSlash('/hi  Bob and Ann '))
+  assert_equal(['ns:cmd', 'x'], util.ParseSlash('/ns:cmd x'))
+  assert_equal([], util.ParseSlash('/etc/hosts is broken'))
+  assert_equal([], util.ParseSlash(' /compact'))
+  assert_equal([], util.ParseSlash('hello /compact'))
+  assert_equal([], util.ParseSlash('/'))
+enddef
+
+def g:Test_SlashMatches_orders_and_describes()
+  var names = ['zeta', 'compact', 'cost', 'clear', '__hidden', 'model', 'code-review']
+  var all = util.SlashMatches(names, {cost: 'Show cost'}, '')
+  # Everyday commands first, internal ones never.
+  assert_equal(['/clear', '/compact', '/cost', '/model', '/code-review', '/zeta'], mapnew(all, (_, i) => i.word))
+  assert_equal('Show cost', all[2].menu)
+  assert_equal('', all[0].menu)
+  # Prefix matches before fuzzy ones.
+  var co = util.SlashMatches(names, {}, 'co')
+  assert_equal(['/code-review', '/compact', '/cost'], mapnew(co, (_, i) => i.word)[0 : 2])
+  assert_equal([], util.SlashMatches(names, {}, 'qqq'))
+enddef
+
+def g:Test_Frontmatter_reads_a_key()
+  var f = ['---', 'name: demo', 'description: "Say hello"', 'argument-hint: [name]', '---', 'body']
+  assert_equal('Say hello', util.Frontmatter(f, 'description'))
+  assert_equal('demo', util.Frontmatter(f, 'name'))
+  assert_equal('', util.Frontmatter(f, 'missing'))
+  assert_equal('', util.Frontmatter(['no front matter', 'description: x'], 'description'))
+  assert_equal('', util.Frontmatter(['---', 'description: >', '  long', '---'], 'description'))
+  assert_equal(60, strcharlen(util.Frontmatter(['---', 'description: ' .. repeat('x', 90), '---'], 'description')))
+enddef

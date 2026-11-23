@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Slash commands: `/` completes the commands the CLI reports (built-ins,
+  custom commands, skills) with descriptions. Commands are sent verbatim
+  (no editor context), unknown ones are refused locally, and `/clear`,
+  `/model`, `/permissions`, `/resume`, `/help`, `/exit` are handled in Vim.
+  `/compact` shows its progress and a before/after token count.
+
 - Tool results are shown under each call: numbered diffs (from the CLI's own
   patch) for Edit/MultiEdit/Write, the first lines of Bash output, line
   counts for Read/Grep/Glob and a checklist for TodoWrite. See

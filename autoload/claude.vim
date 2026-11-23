@@ -27,6 +27,9 @@ var perm_mode = ''
 var session_allowed: list<string> = []   # --allowedTools rules ('retry' prompts only)
 var prompts: list<dict<any>> = []        # tool permission requests waiting for an answer
 var prompt_popup = 0                     # popup showing prompts[0]
+var known_commands: list<string> = []    # slash commands the CLI reported
+var slash_descs: dict<string> = {}
+var slash_descs_cwd = ''
 var tool_calls: dict<dict<any>> = {}     # tool_use id -> {name, input}, until its result arrives
 var interrupting = false                 # an interrupt was sent, waiting for the turn to end
 var interrupt_timer = 0
@@ -230,6 +233,7 @@ def SetupInputBuf()
     # Refresh first: once the @file menu is open, refreshing is skipped.
     autocmd TextChanged,TextChangedI,BufWinEnter,CompleteDone <buffer> RefreshInput()
     autocmd TextChangedI,TextChangedP <buffer> MentionComplete()
+    autocmd TextChangedI,TextChangedP <buffer> SlashComplete()
     autocmd WinResized * RefreshInput()
   augroup END
 enddef
@@ -907,6 +911,21 @@ def OnEvent(line: string)
     if get(ev, 'subtype', '') == 'init'
       session_id = get(ev, 'session_id', session_id)
       model_name = get(ev, 'model', model_name)
+      var cmds = get(ev, 'slash_commands', [])
+      if type(cmds) == v:t_list && !empty(cmds)
+        known_commands = filter(copy(cmds), (_, n) => type(n) == v:t_string && n !~ '^__')
+      endif
+    elseif get(ev, 'subtype', '') == 'status'
+      var st = get(ev, 'status', '')
+      if type(st) == v:t_string && st != '' && busy
+        status_text = st
+        UpdateLive()
+      endif
+    elseif get(ev, 'subtype', '') == 'compact_boundary'
+      var meta = get(ev, 'compact_metadata', {})
+      var Tok = (n: any): string => type(n) == v:t_number ? printf('%.1fk', n / 1000.0) : '?'
+      Info('── conversation compacted (' .. Tok(get(meta, 'pre_tokens', 0)) .. ' → '
+        .. Tok(get(meta, 'post_tokens', 0)) .. ' tokens)')
     endif
   elseif t == 'stream_event'
     if !IsSubagent(ev)
@@ -1270,8 +1289,76 @@ def MentionLines(path: string, l1: number, l2: number): list<string>
   return []
 enddef
 
+def Remember(text: string)
+  if empty(history) || history[-1] != text
+    add(history, text)
+  endif
+  hist_idx = -1
+enddef
+
+def SlashNames(): list<string>
+  return (empty(known_commands) ? util.BASIC_COMMANDS : known_commands) + util.LOCAL_COMMANDS
+enddef
+
+# Commands the CLI can't run without a terminal are done here; a command it
+# doesn't know is refused before it reaches the model. True when handled.
+def RunSlash(name: string, args: string, text: string): bool
+  if index(util.LOCAL_COMMANDS, name) < 0
+    if !empty(known_commands) && index(known_commands, name) < 0
+      Warn('unknown command /' .. name .. ' (type / to list them; start with a space to send it as text)')
+      if bufexists(input_buf)
+        setbufline(input_buf, 1, split(text, "\n", 1))
+        RefreshInput()
+      endif
+      return true
+    endif
+    return false
+  endif
+  Remember(text)
+  if name == 'clear' || name == 'new'
+    NewChat()
+  elseif name == 'model'
+    SetModel(args)
+  elseif name == 'permissions' || name == 'mode'
+    SetMode(args)
+  elseif name == 'resume'
+    Resume()
+  elseif name == 'exit' || name == 'quit'
+    Close()
+  elseif name == 'help'
+    ShowHelp()
+  endif
+  return true
+enddef
+
+def ShowHelp()
+  EnsureChatBuf()
+  if !IsOpen()
+    Open(false)
+  endif
+  var descs = SlashDescs()
+  var names = uniq(sort(copy(SlashNames())))
+  var lines = ['Type / in the input to complete a command.']
+  for n in names
+    if has_key(descs, n)
+      add(lines, printf('/%-16s %s', n, descs[n]))
+    endif
+  endfor
+  var rest = len(filter(copy(names), (_, n) => !has_key(descs, n) && n !~ '^__'))
+  if rest > 0
+    add(lines, '… and ' .. rest .. ' more (custom commands and skills): type / to browse')
+  endif
+  for l in lines
+    Info(l)
+  endfor
+enddef
+
 export def Send(text: string, display: string = '')
   if trim(text) == ''
+    return
+  endif
+  var slash = util.ParseSlash(text)
+  if !empty(slash) && RunSlash(slash[0], slash[1], text)
     return
   endif
   if busy
@@ -1282,10 +1369,7 @@ export def Send(text: string, display: string = '')
   if !IsOpen()
     Open(false)
   endif
-  if empty(history) || history[-1] != text
-    add(history, text)
-  endif
-  hist_idx = -1
+  Remember(text)
   file_cache = []
   RenderUser(display != '' ? display : text)
   var mentions = util.FindRangeMentions(text)
@@ -1296,7 +1380,8 @@ export def Send(text: string, display: string = '')
   for w in ChatWins()
     win_execute(w, 'normal! G')
   endfor
-  if !SendRaw(util.ExpandMentions(text, MentionLines) .. EditorContext())
+  # A command's arguments must stay exactly as typed: no editor context.
+  if !SendRaw(util.ExpandMentions(text, MentionLines) .. (empty(slash) ? EditorContext() : ''))
     Info('✖ Not sent')
   endif
 enddef
@@ -1637,6 +1722,59 @@ def MentionComplete()
   var base = strpart(m[0], 1)
   var files = ProjectFiles()
   complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
+enddef
+
+# ---------------------------------------------------------------- /commands
+
+# Names and one-line descriptions: built-ins, then custom commands and skills
+# found in .claude/ (project) and ~/.claude/.
+def SlashDescs(): dict<string>
+  var cwd = getcwd()
+  if slash_descs_cwd != cwd
+    slash_descs_cwd = cwd
+    slash_descs = copy(util.COMMAND_DESCRIPTIONS)
+    for dir in [cwd .. '/.claude/commands', expand('~/.claude/commands')]
+      for f in glob(dir .. '/**/*.md', false, true)
+        var d = util.Frontmatter(readfile(f, '', 15), 'description')
+        if d != ''
+          slash_descs[fnamemodify(f, ':t:r')] = d
+        endif
+      endfor
+    endfor
+    for dir in [cwd .. '/.claude/skills', expand('~/.claude/skills')]
+      for f in glob(dir .. '/*/SKILL.md', false, true)
+        var lines = readfile(f, '', 20)
+        var name = util.Frontmatter(lines, 'name')
+        var d = util.Frontmatter(lines, 'description')
+        if d != ''
+          slash_descs[name != '' ? name : fnamemodify(f, ':h:t')] = d
+        endif
+      endfor
+    endfor
+  endif
+  return slash_descs
+enddef
+
+export def SlashCandidates(base: string): list<dict<any>>
+  return util.SlashMatches(SlashNames(), SlashDescs(), base)
+enddef
+
+# "/" at the start of the message: complete command names as you type.
+def SlashComplete()
+  if line('.') != 1
+    return
+  endif
+  var before = strpart(getline('.'), 0, col('.') - 1)
+  if before !~ '^/[^ ]*$'
+    return
+  endif
+  var items = SlashCandidates(strpart(before, 1))
+  if empty(items) || (len(items) == 1 && items[0].word ==# before)
+    # Nothing left to complete: close the menu so <CR> sends.
+    complete(1, [])
+    return
+  endif
+  complete(1, items)
 enddef
 
 # ---------------------------------------------------------------- health

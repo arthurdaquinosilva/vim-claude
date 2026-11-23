@@ -468,3 +468,84 @@ def g:Test_tool_details_can_be_turned_off()
   assert_equal(-1, index(ChatLines(), '    ⎿ Read 42 lines'))
   assert_notequal(-1, index(ChatLines(), '  ● Read a.txt'))
 enddef
+
+def Sent(): list<string>
+  return filter(g:FakeLog(), (_, l) => l =~ '^STDIN ')
+enddef
+
+def g:Test_slash_command_is_sent_verbatim_without_editor_context()
+  Reset()
+  g:claude_last_ctx = {file: expand('%:p'), line: 1, total: 1}
+  claude.Send('/hi Bob')
+  g:WaitFor('!claude#Busy()')
+  var msg = json_decode(Sent()[0][6 :])
+  assert_equal('/hi Bob', msg.message.content)
+  # A normal message still carries the editor context.
+  claude.Send('plain')
+  g:WaitFor('!claude#Busy()')
+  unlet g:claude_last_ctx
+enddef
+
+def g:Test_clear_model_and_help_are_handled_locally()
+  Reset()
+  claude.Send('first')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(1, len(Sent()))
+  claude.Send('/model haiku')
+  claude.Send('/help')
+  assert_match('/compact ', join(ChatLines(), "\n"))
+  assert_match('… and 1 more (custom commands and skills)', join(ChatLines(), "\n"))
+  claude.Send('/clear')
+  assert_equal([''], ChatLines())
+  assert_equal(1, len(Sent()))   # none of them reached the CLI
+  claude.SetModel('default')
+enddef
+
+def g:Test_unknown_command_is_refused_and_kept_in_the_input()
+  Reset()
+  claude.Send('warm up')
+  g:WaitFor('!claude#Busy()')
+  claude.Open()
+  claude.Send('/nonsense foo')
+  var warn = execute('messages')
+  assert_match('unknown command /nonsense', warn)
+  assert_equal(['/nonsense foo'], getbufline(claude.Debug().input_buf, 1, '$'))
+  assert_equal(1, len(Sent()))
+  # A leading space sends it as plain text.
+  claude.Send(' /nonsense foo')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(2, len(Sent()))
+enddef
+
+def g:Test_compact_shows_progress_and_result()
+  Reset()
+  claude.Send('/compact')
+  g:WaitFor('!claude#Busy()')
+  assert_match('conversation compacted (19.1k → 6.7k tokens)', join(ChatLines(), "\n"))
+enddef
+
+def g:Test_slash_candidates_come_from_the_cli_and_custom_files()
+  Reset()
+  # Before the CLI has reported anything: the basics.
+  assert_true(index(mapnew(claude.SlashCandidates(''), (_, i) => i.word), '/compact') >= 0)
+  claude.Send('hello')
+  g:WaitFor('!claude#Busy()')
+  var words = mapnew(claude.SlashCandidates(''), (_, i) => i.word)
+  assert_true(index(words, '/hi') >= 0)       # reported by the CLI
+  assert_true(index(words, '/help') >= 0)     # handled by the plugin
+  assert_equal(-1, index(words, '/__internal'))
+  assert_equal('/clear', words[0])
+  assert_equal('Start a new conversation', claude.SlashCandidates('clear')[0].menu)
+enddef
+
+def g:Test_custom_command_descriptions_are_read_from_claude_dir()
+  var dir = tempname()
+  mkdir(dir .. '/.claude/commands', 'p')
+  writefile(['---', 'description: Say hello to someone', '---', 'Say hello to $ARGUMENTS'], dir .. '/.claude/commands/hi.md')
+  var old = getcwd()
+  execute 'cd ' .. fnameescape(dir)
+  var items = claude.SlashCandidates('hi')
+  execute 'cd ' .. fnameescape(old)
+  delete(dir, 'rf')
+  assert_equal('Say hello to someone', items[0].menu)
+enddef
