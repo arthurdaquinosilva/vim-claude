@@ -71,18 +71,64 @@ def g:Test_second_message_reuses_process_and_new_chat_resets()
   assert_equal('', claude.Debug().session_id)
 enddef
 
-def g:Test_restart_after_new_chat_resumes_session()
+def g:Test_restart_resumes_the_session()
   Reset()
   claude.Send('one')
   g:WaitFor('!claude#Busy()')
-  claude.SetModel('haiku')   # forces a restart on the next message
+  g:claude_extra_args = ['--verbose-fake']   # a launch argument changed: restart
   claude.Send('two')
   g:WaitFor('!claude#Busy()')
+  unlet g:claude_extra_args
   var args = filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')
   assert_equal(2, len(args))
   assert_match('--resume 11111111-2222-3333-4444-555555555555', args[1])
-  assert_match('--model haiku', args[1])
+enddef
+
+def Ctrl(): list<dict<any>>
+  return mapnew(filter(g:FakeLog(), (_, l) => l =~ '^CTRL '), (_, l) => json_decode(l[5 :]).request)
+enddef
+
+def g:Test_model_and_mode_change_in_place_without_restart()
+  Reset()
+  claude.Send('one')
+  g:WaitFor('!claude#Busy()')
+  claude.SetModel('haiku')
+  claude.SetMode('plan')
+  claude.SetMode('acceptEdits')
+  g:WaitFor('len(g:FakeLog()) > 0 && len(filter(g:FakeLog(), "v:val =~ ''^CTRL ''")) == 3')
+  assert_equal([{subtype: 'set_model', model: 'haiku'}, {subtype: 'set_permission_mode', mode: 'plan'},
+    {subtype: 'set_permission_mode', mode: 'acceptEdits'}], Ctrl())
+  assert_equal('acceptEdits', claude.Debug().mode)
+  # The reply to set_model tells which model is in effect.
+  g:WaitFor("claude#InputStatusLine(win_getid())->stridx('haiku') >= 0")
+  claude.Send('two')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')))
   claude.SetModel('default')
+  claude.SetMode('default')
+enddef
+
+def g:Test_bypass_mode_asks_first()
+  Reset()
+  g:claude_confirm_bypass = true
+  claude.SetMode('bypassPermissions')
+  assert_equal('default', claude.Debug().mode)
+  g:claude_confirm_bypass = false
+  claude.SetMode('bypassPermissions')
+  assert_equal('bypassPermissions', claude.Debug().mode)
+  unlet g:claude_confirm_bypass
+  claude.SetMode('default')
+enddef
+
+def g:Test_cycle_mode_follows_the_cli_order()
+  Reset()
+  var seen: list<string> = []
+  for _ in range(4)
+    claude.CycleMode()
+    add(seen, claude.Debug().mode)
+  endfor
+  assert_equal(['acceptEdits', 'plan', 'default', 'acceptEdits'], seen)
+  claude.SetMode('default')
 enddef
 
 def g:Test_stop_interrupts_a_running_turn()
@@ -548,4 +594,87 @@ def g:Test_custom_command_descriptions_are_read_from_claude_dir()
   execute 'cd ' .. fnameescape(old)
   delete(dir, 'rf')
   assert_equal('Say hello to someone', items[0].menu)
+enddef
+
+def g:Test_plan_approval_popup()
+  Reset()
+  claude.SetMode('plan')
+  claude.Send('CTRLPLAN make a plan')
+  g:WaitFor('!empty(popup_list())')
+  var text = join(getbufline(winbufnr(popup_list()[0]), 1, '$'), "\n")
+  assert_match('# Plan\n1. Do it\n2. Test it', text)
+  assert_match('approve + auto-accept edits', text)
+  assert_match("Claude's plan", popup_getoptions(popup_list()[0]).title)
+  feedkeys('a', 'tx')
+  g:WaitFor('!claude#Busy()')
+  var r = Replies()[0]
+  assert_equal('allow', r.response.behavior)
+  assert_equal([{type: 'setMode', mode: 'acceptEdits', destination: 'session'}], r.response.updatedPermissions)
+  assert_equal('acceptEdits', claude.Debug().mode)
+  assert_match('✓ Plan approved (auto-accepting edits)', join(ChatLines(), "\n"))
+  claude.SetMode('default')
+enddef
+
+def g:Test_plan_approval_keep_planning_and_plain_approve()
+  Reset()
+  claude.SetMode('plan')
+  claude.Send('CTRLPLAN one')
+  Press('n')
+  g:WaitFor('!claude#Busy()')
+  assert_equal('deny', Replies()[0].response.behavior)
+  assert_match('keep planning', Replies()[0].response.message)
+  assert_equal('plan', claude.Debug().mode)
+  writefile([], $FAKE_CLAUDE_LOG)
+  claude.Send('CTRLPLAN two')
+  Press('y')
+  g:WaitFor('!claude#Busy()')
+  assert_equal('default', claude.Debug().mode)   # back to what it was before plan mode
+  claude.SetMode('default')
+enddef
+
+def g:Test_ask_user_question_collects_answers()
+  Reset()
+  claude.Send('CTRLASK pick')
+  g:WaitFor('!empty(popup_list())')
+  var first = join(getbufline(winbufnr(popup_list()[0]), 1, '$'), "\n")
+  assert_match('Which color?', first)
+  assert_match('2. Blue', first)
+  assert_match('(1/2)', popup_getoptions(popup_list()[0]).title)
+  feedkeys('2', 'tx')
+  g:WaitFor('!empty(popup_list()) && getbufline(winbufnr(popup_list()[0]), 1)[0] =~ "sizes"')
+  feedkeys('1', 'tx')
+  feedkeys('3', 'tx')
+  assert_match('3. \[x\] L', join(getbufline(winbufnr(popup_list()[0]), 1, '$'), "\n"))
+  feedkeys("\<CR>", 'tx')
+  g:WaitFor('!claude#Busy()')
+  var r = Replies()[0].response
+  assert_equal('allow', r.behavior)
+  assert_equal({'Which color?': 'Blue', 'Which sizes?': 'S, L'}, r.updatedInput.answers)
+  assert_equal(2, len(r.updatedInput.questions))
+  assert_match('✓ Answered: Blue · S, L', join(ChatLines(), "\n"))
+enddef
+
+def g:Test_skipping_a_question_denies()
+  Reset()
+  claude.Send('CTRLASK pick')
+  Press("\<Esc>")
+  g:WaitFor('!claude#Busy()')
+  assert_equal('deny', Replies()[0].response.behavior)
+  assert_match('✗ Skipped the question', join(ChatLines(), "\n"))
+enddef
+
+def g:Test_context_usage_shows_in_the_statusline_and_warns()
+  Reset()
+  claude.Open()
+  claude.Send('CTX please')
+  g:WaitFor('!claude#Busy()')
+  var bar = claude#InputStatusLine(win_getid())
+  # The last API call counts: 20 + 879980 of a 1M window.
+  assert_match('⚠ ctx 88%\|ctx 88%', bar)
+  assert_match('! Context is 88% full', join(ChatLines(), "\n"))
+  g:claude_show_cost = true
+  assert_match('\$0.05', claude#InputStatusLine(win_getid()))
+  unlet g:claude_show_cost
+  claude.NewChat()
+  assert_notmatch('ctx', claude#InputStatusLine(win_getid()))
 enddef

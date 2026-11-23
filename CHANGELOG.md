@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Model and permission-mode changes apply to the running session (no restart,
+  no lost prompt cache). Shift-Tab cycles the mode; bypassPermissions asks
+  for confirmation.
+- Plan approval popup (approve, approve and auto-accept edits, keep planning)
+  and a popup for the CLI's multiple-choice questions (AskUserQuestion).
+- The statusline shows how full the context window is, with a warning near
+  the limit; `g:claude_show_cost` adds the session cost.
+- Sending to a process that just died restarts it once instead of failing.
+
 - Slash commands: `/` completes the commands the CLI reports (built-ins,
   custom commands, skills) with descriptions. Commands are sent verbatim
   (no editor context), unknown ones are refused locally, and `/clear`,

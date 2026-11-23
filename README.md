@@ -23,12 +23,17 @@ run commands when you allow it, and keep context across messages.
   something and waits. A popup shows the diff or command; `y` allows, `a`
   allows it for the session, `e` accepts all edits, `n` denies. Nothing
   restarts, and changed buffers are reloaded.
+- **Plan mode and questions.** `Shift-Tab` cycles default, auto-accept and
+  plan mode like the CLI. When Claude presents a plan you approve it (with
+  or without auto-accepting edits) or ask it to keep planning, and its
+  multiple-choice questions appear as a popup.
 - **Interrupt.** `Ctrl-C` stops a reply in under a second and keeps the
   session (and its prompt cache) alive.
 - **Tool activity.** `● Read src/app.py`, `● Edit …` and `● Bash npm test`
   show what Claude did, with the result under each: numbered diffs for edits,
   the first lines of command output, line counts for reads and todo
-  checklists. The statusline has a spinner, the model and the permission mode.
+  checklists. The statusline has a spinner, the model, how full the context window is and
+  the permission mode.
 - **Slash commands.** Type `/` for a completion menu of everything the CLI
   supports: built-ins such as `/compact`, `/context` and `/init`, plus your
   custom commands and skills, with their descriptions. `/clear`, `/model`,

@@ -80,7 +80,8 @@ counted), reads and searches with a count, todo lists as a checklist. Tune
 with |g:claude_tool_details| and |g:claude_tool_lines|.
 
 The statusline shows a spinner and what Claude is doing (thinking, using a
-tool), the model, and the permission mode. Each reply ends with its duration.
+tool), the model, how full the context window is (ctx 12%), and the
+permission mode. A warning appears when the context is 85% full. Each reply ends with its duration.
 
 The conversation is one Claude Code session; messages share context until
 |:ClaudeNew|. Earlier sessions for the current directory can be reopened with
@@ -142,6 +143,19 @@ interrupts. The starting mode is |g:claude_permission_mode|; switch with
 |g:claude_permission_prompt| = 'retry' restores the older behavior for CLIs
 that cannot ask: Claude is denied, the popup comes after the reply, and the
 plugin asks Claude to retry once you allow.
+
+Plan mode: <S-Tab> in the input box cycles default, acceptEdits and plan. When
+Claude finishes planning, a popup shows the plan (scroll with j k <C-d> <C-u>):
+`y` approves and returns to the previous mode, `a` approves and auto-accepts
+edits, `n` asks Claude to keep planning.
+
+Questions: when Claude asks you to choose (AskUserQuestion), a popup lists the
+options. Press the number to answer, `o` to type your own answer, <Esc> to
+skip. With several choices allowed, numbers toggle and <CR> confirms.
+
+Changing the model (|:ClaudeModel|) or the mode (|:ClaudeMode|) applies to the
+running session immediately. Switching to bypassPermissions asks for
+confirmation (|g:claude_confirm_bypass|).
 
 Stopping: <C-c> asks Claude to interrupt the reply. The session and its
 prompt cache stay alive, so the next message continues without a restart. If
@@ -216,6 +230,7 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
                             replies as aligned box tables.
 *g:claude_tool_details*     Show what tool calls did.       Default: v:true
 *g:claude_tool_lines*       Most lines shown under a call.  Default: 12
+*g:claude_confirm_bypass*   Ask before bypassPermissions.   Default: v:true
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_debug_log*        File to append the raw CLI     Default: ''

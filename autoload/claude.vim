@@ -31,6 +31,11 @@ var known_commands: list<string> = []    # slash commands the CLI reported
 var slash_descs: dict<string> = {}
 var slash_descs_cwd = ''
 var tool_calls: dict<dict<any>> = {}     # tool_use id -> {name, input}, until its result arrives
+var mode_before_plan = 'default'
+var mode_requests: dict<string> = {}     # set_permission_mode request id -> mode
+var ctx_used = 0                         # tokens in the context window after the last reply
+var ctx_window = 0
+var session_cost = 0.0
 var interrupting = false                 # an interrupt was sent, waiting for the turn to end
 var interrupt_timer = 0
 
@@ -214,7 +219,8 @@ def SetupInputBuf()
   # Enter picks the highlighted @file while the menu is open, otherwise sends.
   inoremap <buffer><silent><expr> <CR> pumvisible() ? "\<C-y> " : "\<Cmd>call claude#SubmitInput()\<CR>"
   inoremap <buffer><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
-  inoremap <buffer><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
+  inoremap <buffer><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<Cmd>call claude#CycleMode()\<CR>"
+  nnoremap <buffer><silent> <S-Tab> <ScriptCmd>CycleMode()<CR>
   inoremap <buffer> <S-CR> <CR>
   nnoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
   inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
@@ -376,6 +382,12 @@ enddef
 
 # Below the input: a quiet line with the file Claude is told about (or how
 # to stop it while busy) on the left, and the model and mode on the right.
+def ContextLabel(): string
+  var pct = ctx_used * 100 / ctx_window
+  return (pct >= 90 ? '⚠ ' : '') .. 'ctx ' .. (pct == 0 ? '<1' : string(pct)) .. '%'
+    .. (Opt('show_cost', false) ? printf(' · $%.2f', session_cost) : '')
+enddef
+
 export def InputStatusLine(winid: number = 0): string
   var left: list<list<string>> = []
   if busy
@@ -387,7 +399,8 @@ export def InputStatusLine(winid: number = 0): string
     endif
   endif
   var m = substitute(model_name != '' ? model_name : Model(), '^claude-', '', '')
-  var right = [[(m == '' ? '' : m .. ' · ') .. get(MODE_LABELS, Mode(), Mode()), '']]
+  var right = [[(m == '' ? '' : m .. ' · ') .. (ctx_window > 0 && ctx_used > 0 ? ContextLabel() .. ' · ' : '')
+    .. get(MODE_LABELS, Mode(), Mode()), '']]
   if busy
     # What Claude is doing, right next to the model.
     right = [[SPIN[spin_i % len(SPIN)] .. ' ' .. get(LIVE_LABELS, status_text, status_text .. '…'), 'ClaudeBusy'],
@@ -778,6 +791,7 @@ def StopProcess()
   ClosePrompts()
   ClearInterrupt()
   var j = job
+  job = null_job   # from now on it is gone as far as we are concerned
   job_stop(j, 'term')
   # Don't wait for it: its callbacks are silenced. Make sure it is gone soon.
   timer_start(1000, (_) => {
@@ -872,7 +886,20 @@ def SendRaw(payload: string): bool
     return false
   endif
   var msg = {type: 'user', message: {role: 'user', content: payload}}
-  ch_sendraw(job, json_encode(msg) .. "\n")
+  # The process may have just died; start a fresh one once before giving up.
+  if ch_status(job) != 'open'
+    proc_sig = ''
+    if !EnsureProcess() || ch_status(job) != 'open'
+      Warn('could not reach the claude process')
+      return false
+    endif
+  endif
+  try
+    ch_sendraw(job, json_encode(msg) .. "\n")
+  catch
+    Warn('could not reach the claude process: ' .. v:exception)
+    return false
+  endtry
   streamed = false
   turn_header = false
   SetBusy(true, 'thinking')
@@ -939,6 +966,8 @@ def OnEvent(line: string)
     OnToolResults(ev)
   elseif t == 'result'
     OnResult(ev)
+  elseif t == 'control_response'
+    OnControlResponse(ev)
   elseif t == 'control_request'
     OnControlRequest(ev)
   elseif t == 'control_cancel_request'
@@ -1052,6 +1081,33 @@ def OnToolResults(ev: dict<any>)
   UpdateLive()
 enddef
 
+# Context window fill after this reply, and the session cost so far.
+def NoteUsage(ev: dict<any>)
+  var u = get(ev, 'usage', {})
+  if type(u) == v:t_dict
+    # The last API call of the turn holds what the next one will start from.
+    var its = get(u, 'iterations', [])
+    var last = type(its) == v:t_list && !empty(its) && type(its[-1]) == v:t_dict ? its[-1] : u
+    var used = get(last, 'input_tokens', 0) + get(last, 'cache_read_input_tokens', 0)
+      + get(last, 'cache_creation_input_tokens', 0)
+    if used > 0
+      ctx_used = used
+    endif
+  endif
+  var mu = get(ev, 'modelUsage', {})
+  if type(mu) == v:t_dict
+    for [_, m] in items(mu)
+      if type(m) == v:t_dict && get(m, 'contextWindow', 0) > 0
+        ctx_window = m.contextWindow
+      endif
+    endfor
+  endif
+  var cost = get(ev, 'total_cost_usd', v:null)
+  if type(cost) == v:t_float || type(cost) == v:t_number
+    session_cost = cost + 0.0
+  endif
+enddef
+
 def OnResult(ev: dict<any>)
   var secs = printf('%.1fs', reltimefloat(reltime(turn_start)))
   if interrupting
@@ -1064,6 +1120,7 @@ def OnResult(ev: dict<any>)
     var r = get(ev, 'result', '')
     Info('✖ ' .. (type(r) == v:t_string && r != '' ? r : get(ev, 'subtype', 'error')))
   endif
+  NoteUsage(ev)
   var denials = get(ev, 'permission_denials', [])
   if HostPrompts()
     # Denials were already answered one by one, as they came up.
@@ -1079,6 +1136,9 @@ def OnResult(ev: dict<any>)
     Info('! Needs permission: ' .. join(uniq(sort(what)), ', '))
   endif
   Info(footer)
+  if ctx_window > 0 && ctx_used * 100 / ctx_window >= 85
+    Info('! Context is ' .. (ctx_used * 100 / ctx_window) .. '% full: /compact frees space, /clear starts over')
+  endif
   FinishTurn()
   if type(denials) == v:t_list && !empty(denials)
     AskPermission(denials)
@@ -1122,6 +1182,24 @@ enddef
 
 # ---- synchronous prompts: the CLI sends a request and waits for our answer
 
+# Answers to what we asked: the model in effect, or a mode that could not be
+# applied in place (then the process is restarted with it on the next message).
+def OnControlResponse(ev: dict<any>)
+  var r = get(ev, 'response', {})
+  var id = get(r, 'request_id', '')
+  if has_key(mode_requests, id)
+    remove(mode_requests, id)
+    if get(r, 'subtype', '') == 'error'
+      proc_sig = ''
+    endif
+  endif
+  var body = get(r, 'response', {})
+  if type(body) == v:t_dict && type(get(body, 'model', 0)) == v:t_string
+    model_name = body.model
+    redrawstatus!
+  endif
+enddef
+
 def OnControlRequest(ev: dict<any>)
   var req = get(ev, 'request', {})
   var id = get(ev, 'request_id', '')
@@ -1150,41 +1228,51 @@ def ShowPrompt()
     return
   endif
   var pr = prompts[0]
-  var edit = util.IsEditTool(pr.tool)
-  var summary = util.ToolSummary(pr.tool, pr.input)
   SetBusy(true, 'waiting for you')
-  var keys = [['y', 'allow'], ['a', 'always this session']]
-  if edit
-    add(keys, ['e', 'accept all edits'])
+  if pr.tool == 'AskUserQuestion' && type(get(pr.input, 'questions', 0)) == v:t_list && !empty(pr.input.questions)
+    AskQuestion(pr, 0, {})
+    return
   endif
-  add(keys, ['n', 'deny'])
+  var plan = pr.tool == 'ExitPlanMode'
+  var edit = util.IsEditTool(pr.tool)
+  var summary = plan ? "Claude's plan" : util.ToolSummary(pr.tool, pr.input)
+  var keys: list<list<string>>
+  var lines: list<string>
+  if plan
+    keys = [['y', 'approve'], ['a', 'approve + auto-accept edits'], ['n', 'keep planning']]
+    lines = split(get(pr.input, 'plan', ''), "\n", 1)
+  else
+    keys = [['y', 'allow'], ['a', 'always this session']]
+    if edit
+      add(keys, ['e', 'accept all edits'])
+    endif
+    add(keys, ['n', 'deny'])
+    lines = util.PermissionPreview(pr.tool, pr.input)
+  endif
   var more = len(prompts) > 1 ? '  (+' .. (len(prompts) - 1) .. ' more waiting)' : ''
-  var lines = util.PermissionPreview(pr.tool, pr.input)
   var footer = join(map(copy(keys), (_, k) => '[' .. k[0] .. '] ' .. k[1]), '   ') .. more
   if !exists('*popup_create') || Opt('no_popups', false)
     var pick = inputlist(['Claude wants to: ' .. summary] + map(copy(keys), (i, k) => (i + 1) .. '. ' .. k[1]))
     HandlePromptKey(pick >= 1 && pick <= len(keys) ? keys[pick - 1][0] : 'n')
     return
   endif
+  var names = map(copy(keys), (_, kk) => kk[0])
   prompt_popup = popup_create(lines + (empty(lines) ? [] : ['']) + [footer], {
     title: ' ' .. summary .. ' ',
     padding: [0, 1, 0, 1], border: [], pos: 'center', zindex: 200,
     minwidth: 40, maxwidth: float2nr(&columns * 0.85), maxheight: &lines - 6,
-    wrap: true, mapping: false, drag: false,
+    wrap: true, mapping: false, drag: false, scrollbar: true,
     filter: (id, key) => {
+      if ScrollKey(id, key)
+        return true
+      endif
       var k = tolower(key)
       if k == "\<Esc>" || k == "\<C-c>"
         k = 'n'
-      elseif k == '1'
-        k = 'y'
-      elseif k == '2'
-        k = 'a'
-      elseif k == '3'
-        k = edit ? 'e' : 'n'
-      elseif k == '4'
-        k = edit ? 'n' : ''
+      elseif str2nr(k) >= 1 && str2nr(k) <= len(names) && k =~ '^\d$'
+        k = names[str2nr(k) - 1]
       endif
-      if index(map(copy(keys), (_, kk) => kk[0]), k) >= 0
+      if index(names, k) >= 0
         popup_close(id)
         HandlePromptKey(k)
       endif
@@ -1195,6 +1283,130 @@ def ShowPrompt()
     'call matchadd("Comment", "^#.*")', 'call matchadd("Title", "^\\[.\\] .*")'])
 enddef
 
+# j/k, arrows, Ctrl-D/U and the page keys scroll a long popup.
+def ScrollKey(id: number, key: string): bool
+  var delta = 0
+  if key == 'j' || key == "\<Down>"
+    delta = 1
+  elseif key == 'k' || key == "\<Up>"
+    delta = -1
+  elseif key == "\<C-d>" || key == "\<PageDown>"
+    delta = 8
+  elseif key == "\<C-u>" || key == "\<PageUp>"
+    delta = -8
+  else
+    return false
+  endif
+  var pos = popup_getpos(id)
+  popup_setoptions(id, {firstline: max([1, pos.firstline + delta])})
+  return true
+enddef
+
+# One question of an AskUserQuestion call: pick an option by number, "o" for
+# your own answer; with multiSelect, numbers toggle and Enter confirms.
+def AskQuestion(pr: dict<any>, qi: number, answers: dict<any>)
+  var q = pr.input.questions[qi]
+  var opts = get(q, 'options', [])
+  var multi = get(q, 'multiSelect', false)
+  var chosen: list<number> = []
+  var nq = len(pr.input.questions)
+  var Lines = (): list<string> => {
+    var l: list<string> = []
+    for i in range(len(opts))
+      var o = opts[i]
+      var mark = multi ? (index(chosen, i) >= 0 ? '[x] ' : '[ ] ') : ''
+      add(l, (i + 1) .. '. ' .. mark .. get(o, 'label', ''))
+      if get(o, 'description', '') != ''
+        add(l, '     ' .. o.description)
+      endif
+    endfor
+    add(l, '')
+    add(l, (multi ? '[1-' .. len(opts) .. '] toggle  [Enter] done  ' : '[1-' .. len(opts) .. '] choose  ') .. '[o] other  [Esc] skip')
+    return l
+  }
+  var title = ' ' .. get(q, 'header', 'Question') .. (nq > 1 ? ' (' .. (qi + 1) .. '/' .. nq .. ')' : '') .. ' '
+  var Finish = (value: string) => {
+    var a = copy(answers)
+    a[q.question] = value
+    if qi + 1 < nq
+      AskQuestion(pr, qi + 1, a)
+    else
+      var pr0 = remove(prompts, 0)
+      prompt_popup = 0
+      Answer(pr0.id, {behavior: 'allow', updatedInput: {questions: pr.input.questions, answers: a}})
+      Info('✓ Answered: ' .. join(mapnew(pr.input.questions, (_, qq) => get(a, qq.question, '')), ' · '))
+      if empty(prompts)
+        SetBusy(true, 'thinking')
+      else
+        ShowPrompt()
+      endif
+    endif
+  }
+  var Skip = () => {
+    var pr0 = remove(prompts, 0)
+    prompt_popup = 0
+    Answer(pr0.id, {behavior: 'deny', message: 'The user chose not to answer.'})
+    Info('✗ Skipped the question')
+    if empty(prompts)
+      SetBusy(true, 'thinking')
+    else
+      ShowPrompt()
+    endif
+  }
+  if !exists('*popup_create') || Opt('no_popups', false)
+    var pick = inputlist([q.question] + mapnew(opts, (i, o) => (i + 1) .. '. ' .. get(o, 'label', '')))
+    if pick >= 1 && pick <= len(opts)
+      Finish(opts[pick - 1].label)
+    else
+      Skip()
+    endif
+    return
+  endif
+  CloseSingle()
+  prompt_popup = popup_create([q.question, ''] + Lines(), {
+    title: title, padding: [0, 1, 0, 1], border: [], pos: 'center', zindex: 200,
+    minwidth: 40, maxwidth: float2nr(&columns * 0.85), maxheight: &lines - 6,
+    wrap: true, mapping: false, drag: false, scrollbar: true,
+    filter: (id, key) => {
+      if ScrollKey(id, key)
+        return true
+      endif
+      if key == "\<Esc>" || key == "\<C-c>"
+        popup_close(id)
+        Skip()
+      elseif key == 'o' || key == 'O'
+        popup_close(id)
+        var own = input(q.question .. ' ')
+        redraw
+        if trim(own) == ''
+          Skip()
+        else
+          Finish(own)
+        endif
+      elseif key =~ '^[1-9]$' && str2nr(key) <= len(opts)
+        var i = str2nr(key) - 1
+        if multi
+          var at = index(chosen, i)
+          if at >= 0
+            remove(chosen, at)
+          else
+            add(chosen, i)
+          endif
+          popup_settext(id, [q.question, ''] + Lines())
+        else
+          popup_close(id)
+          Finish(opts[i].label)
+        endif
+      elseif multi && (key == "\<CR>" || key == "\<NL>") && !empty(chosen)
+        popup_close(id)
+        Finish(join(mapnew(sort(copy(chosen)), (_, i) => opts[i].label), ', '))
+      endif
+      return true
+    },
+  })
+  win_execute(prompt_popup, ['call matchadd("Title", "^\\[.*\\] .*")', 'call matchadd("Comment", "^     .*")'])
+enddef
+
 def HandlePromptKey(key: string)
   if empty(prompts)
     return
@@ -1202,7 +1414,19 @@ def HandlePromptKey(key: string)
   var pr = remove(prompts, 0)
   prompt_popup = 0
   var what = util.ToolSummary(pr.tool, pr.input)
-  if key == 'n'
+  if pr.tool == 'ExitPlanMode'
+    if key == 'n'
+      Answer(pr.id, {behavior: 'deny', message: 'The user wants to keep planning. Revise the plan with their feedback.'})
+      Info('✗ Plan not approved: keep planning')
+    else
+      var back = key == 'a' ? 'acceptEdits' : mode_before_plan
+      perm_mode = back
+      proc_sig = Sig()
+      Answer(pr.id, {behavior: 'allow', updatedInput: pr.input,
+        updatedPermissions: [{type: 'setMode', mode: back, destination: 'session'}]})
+      Info('✓ Plan approved' .. (key == 'a' ? ' (auto-accepting edits)' : ''))
+    endif
+  elseif key == 'n'
     Answer(pr.id, {behavior: 'deny', message: 'The user denied this tool call.'})
     Info('✗ Denied: ' .. what)
   else
@@ -1461,10 +1685,15 @@ def NewId(): string
 enddef
 
 def SendControl(msg: dict<any>)
-  if Running()
+  if !Running() || ch_status(job) != 'open'
+    return
+  endif
+  try
     ch_sendraw(job, json_encode(msg) .. "\n")
     DebugLog('in', json_encode(msg))
-  endif
+  catch
+    DebugLog('send-failed', v:exception)
+  endtry
 enddef
 
 # ---------------------------------------------------------------- commands
@@ -1559,6 +1788,8 @@ enddef
 export def NewChat()
   StopProcess()
   SetBusy(false)
+  ctx_used = 0
+  session_cost = 0.0
   session_id = ''
   model_name = ''
   session_allowed = []
@@ -1579,10 +1810,13 @@ export def SetModel(name: string)
   endif
   model = name == 'default' ? '' : name
   model_name = ''
-  if Running() && !busy
-    StopProcess()
+  if Running()
+    # Applied in place: no restart, the prompt cache survives.
+    SendControl({type: 'control_request', request_id: NewId(),
+      request: model == '' ? {subtype: 'set_model'} : {subtype: 'set_model', model: model}})
+    proc_sig = Sig()
   endif
-  echo 'claude: model ' .. (model == '' ? 'default' : model) .. ' (applies to the next message)'
+  echo 'claude: model ' .. (model == '' ? 'default' : model)
   redrawstatus!
 enddef
 
@@ -1600,12 +1834,30 @@ export def SetMode(name: string)
     Warn('unknown mode ' .. name .. ' (' .. join(MODES, ', ') .. ')')
     return
   endif
+  if name == 'bypassPermissions' && Mode() != name && Opt('confirm_bypass', true)
+      && confirm('Bypass ALL permission checks? Claude will edit files and run commands without asking.',
+        "&Yes\n&No", 2) != 1
+    return
+  endif
+  if name == 'plan' && Mode() != 'plan'
+    mode_before_plan = Mode()
+  endif
   perm_mode = name
-  if Running() && !busy
-    StopProcess()
+  if Running()
+    var id = NewId()
+    mode_requests[id] = name
+    SendControl({type: 'control_request', request_id: id, request: {subtype: 'set_permission_mode', mode: name}})
+    proc_sig = Sig()
   endif
   echo 'claude: permission mode ' .. name
   redrawstatus!
+enddef
+
+# Shift-Tab: default -> acceptEdits -> plan -> default, like the CLI.
+export def CycleMode()
+  var order = ['default', 'acceptEdits', 'plan']
+  var i = index(order, Mode())
+  SetMode(order[i < 0 ? 0 : (i + 1) % len(order)])
 enddef
 
 export def CompleteModes(..._): string

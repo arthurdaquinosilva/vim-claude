@@ -19,6 +19,20 @@ fi
 echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$sid\",\"model\":\"fake-model\",\"slash_commands\":[\"hi\",\"clear\",\"compact\",\"cost\",\"model\",\"__internal\"]}"
 se() { echo "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"event\":$1}"; }
 while IFS= read -r line; do
+  if [[ "$line" == *'"type":"control_request"'* ]]; then
+    # Control requests sent while idle: log and acknowledge like the real CLI.
+    printf '%s\n' "CTRL $line" >> "$log"
+    rid=$(sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p' <<<"$line")
+    if [[ "$line" == *'"set_model"'* ]]; then
+      m=$(sed -n 's/.*"model":"\([^"]*\)".*/\1/p' <<<"$line")
+      echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"model\":\"claude-${m:-default}\"}}}"
+    elif [[ "$line" == *'FAILMODE'* ]]; then
+      echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"error\",\"request_id\":\"$rid\",\"error\":\"nope\"}}"
+    else
+      echo "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{}}}"
+    fi
+    continue
+  fi
   printf '%s\n' "STDIN $line" >> "$log"
   if [[ "$line" == *SLOW* ]]; then
     se '{"type":"message_start"}'
@@ -40,6 +54,24 @@ while IFS= read -r line; do
     sleep 0.2
     echo '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":19123,"post_tokens":6673}}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":"","permission_denials":[]}'
+    continue
+  fi
+  if [[ "$line" == *CTRLPLAN* ]]; then
+    echo '{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Plan\n1. Do it\n2. Test it"},"tool_use_id":"t1","requires_user_interaction":true}}'
+    read -r ans
+    printf '%s\n' "STDIN $ans" >> "$log"
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    continue
+  fi
+  if [[ "$line" == *CTRLASK* ]]; then
+    echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which color?","header":"Color","options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}],"multiSelect":false},{"question":"Which sizes?","header":"Size","options":[{"label":"S","description":""},{"label":"M","description":""},{"label":"L","description":""}],"multiSelect":true}]},"tool_use_id":"t1"}}'
+    read -r ans
+    printf '%s\n' "STDIN $ans" >> "$log"
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[]}'
+    continue
+  fi
+  if [[ "$line" == *CTX* ]]; then
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.0548,"usage":{"input_tokens":10,"cache_read_input_tokens":900000,"cache_creation_input_tokens":100,"iterations":[{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0},{"input_tokens":20,"cache_read_input_tokens":879980,"cache_creation_input_tokens":0}]},"modelUsage":{"fake":{"contextWindow":1000000}},"permission_denials":[]}'
     continue
   fi
   if [[ "$line" == *TOOLS* ]]; then
