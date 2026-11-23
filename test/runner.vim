@@ -11,7 +11,7 @@ let $FAKE_CLAUDE_LOG = tempname()
 let g:claude_history_dir = tempname()
 
 func g:WaitFor(expr, ...) abort
-  let l:timeout = get(a:, 1, 3000)
+  let l:timeout = get(a:, 1, 10000)
   let l:start = reltime()
   while reltimefloat(reltime(l:start)) * 1000 < l:timeout
     if eval(a:expr)

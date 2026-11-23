@@ -470,6 +470,18 @@ export def Region(lines: list<string>, c1: number, c2: number, mode: string): li
   return mapnew(lines, (_, l) => strcharpart(l, a1, a2 - a1 + 1))
 enddef
 
+# Should the plugin ask the terminal to report modified keys (Shift-Enter)?
+# Terminals only do so on request. Vim asks by itself for some ($TERM it
+# knows, t_TI set); under tmux, screen and similar it does not, and Shift-Enter
+# then arrives as a plain Enter. kitty speaks its own protocol, which Vim
+# handles, and a GUI needs nothing.
+export def WantsExtendedKeys(term: string, t_ti: string, gui: bool): bool
+  if gui || t_ti =~ "\e\\[>4;" || t_ti =~ "\e\\[>1u" || t_ti =~ "\e\\[=[0-9;]*u"
+    return false
+  endif
+  return term =~# '^\%(xterm\|tmux\|screen\|rxvt\|st\>\|foot\|alacritty\|wezterm\|vte\|konsole\|gnome\|putty\)' && term !~# 'kitty'
+enddef
+
 # Images mentioned as @path (png, jpg, gif, webp): [{path, media}].
 export def FindImageMentions(text: string): list<dict<string>>
   var found: list<dict<string>> = []

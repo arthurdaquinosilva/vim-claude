@@ -377,3 +377,20 @@ def g:Test_Region_matches_a_visual_selection()
   assert_equal(['cde', 'ijk'], util.Region(['abcdef', 'ghijkl'], 3, 5, "\<C-v>"))
   assert_equal([], util.Region([], 1, 1, 'v'))
 enddef
+
+def g:Test_WantsExtendedKeys()
+  # tmux and screen: Vim sends nothing itself, so we ask.
+  assert_true(util.WantsExtendedKeys('tmux-256color', '', false))
+  assert_true(util.WantsExtendedKeys('screen-256color', '', false))
+  assert_true(util.WantsExtendedKeys('xterm-256color', '', false))
+  assert_true(util.WantsExtendedKeys('foot', '', false))
+  # Vim already asked (modifyOtherKeys or the kitty protocol): leave it be.
+  assert_false(util.WantsExtendedKeys('xterm-256color', "\e[>4;2m", false))
+  assert_false(util.WantsExtendedKeys('xterm-256color', "\e[?1049h\e[>1u", false))
+  assert_false(util.WantsExtendedKeys('xterm-256color', "\e[=1;1u", false))
+  # kitty has its own protocol, a GUI needs nothing, unknown terminals are left alone.
+  assert_false(util.WantsExtendedKeys('xterm-kitty', '', false))
+  assert_false(util.WantsExtendedKeys('xterm-256color', '', true))
+  assert_false(util.WantsExtendedKeys('linux', '', false))
+  assert_false(util.WantsExtendedKeys('dumb', '', false))
+enddef

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Shift-Enter inserts a newline under tmux and similar terminals: the plugin now
+  asks the terminal to report modified keys while the input box is focused
+  (`g:claude_extended_keys`), instead of Shift-Enter arriving as a plain Enter
+  and sending the message.
 - Fix: starting a new line in the input box (`Ctrl-J`, Shift-Enter, `o`, `O`) no
   longer scrolls the lines above out of view until the next keystroke. The
   window now grows before the line is inserted and keeps a spare row while

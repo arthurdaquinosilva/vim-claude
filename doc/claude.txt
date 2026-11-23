@@ -39,6 +39,13 @@ two rules; the top one shows what Claude is doing while it works. Below,
 file Claude will be told you are looking at, and the model and permission
 mode (or how to stop Claude while it is busy).
 
+Shift-Enter: terminals send it as a plain Enter unless asked to do otherwise.
+Vim asks by itself in some terminals, but not under tmux or screen, so the
+plugin asks (modifyOtherKeys) while the input box has the focus and undoes it
+when you leave. With tmux this needs `set -s extended-keys on` (and, to be
+sure how the key arrives, `extended-keys-format csi-u`). If your terminal
+cannot report the key, use <C-j>. Set |g:claude_extended_keys| to 0 to opt out.
+
 Slash commands: type `/` at the start of the message and a menu lists every
 command the CLI reported (built-ins, custom commands from `.claude/commands`
 and `~/.claude/commands`, and skills), with their descriptions. Commands are
@@ -60,7 +67,7 @@ Input box:
   <CR>           send (insert and normal mode); picks the item if the
                  @file menu is open
   <Tab>          next item in the @file menu
-  <C-j>          new line (also <S-CR> where the terminal supports it)
+  <C-j>          new line (also <S-CR>; see |g:claude_extended_keys|)
   @              fuzzy-complete a project file or directory (git ls-files)
   <C-p> <C-n>    previous / next sent message
   <C-r>          search earlier messages (type, <C-r>/<C-n>/<C-p> to move,
@@ -286,6 +293,9 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_shell_mode*       `!command` runs in your shell.  Default: v:true
 *g:claude_shell_timeout*    Seconds before it is stopped.   Default: 120
 *g:claude_shell_lines*      Output lines shown for it.      Default: 25
+*g:claude_extended_keys*   Ask the terminal to report     Default: v:true
+                            Shift-Enter while the input box
+                            has the focus.
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_debug_log*        File to append the raw CLI     Default: ''

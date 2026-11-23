@@ -67,6 +67,7 @@ var chat_cwd = ''                       # where the conversation runs; fixed unt
 var fork_next = false                   # start the next process with --fork-session
 var shell_pending: list<dict<any>> = []  # "!cmd" results Claude has not been told about yet
 var shell_job: job = null_job
+var ext_keys = false                    # we asked the terminal for modified keys
 var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for rewinding
 var rewind_cbs: dict<func(dict<any>)> = {}
 var queue: list<dict<string>> = []      # messages typed while Claude was busy
@@ -262,6 +263,9 @@ def SetupInputBuf()
 
   augroup claude_input
     autocmd! * <buffer>
+    # Shift-Enter: terminals only report it when asked, and only while typing here.
+    autocmd BufEnter,WinEnter <buffer> ExtendedKeys(true)
+    autocmd BufLeave,WinLeave <buffer> ExtendedKeys(false)
     # Refresh first: once the @file menu is open, refreshing is skipped.
     autocmd TextChanged,TextChangedI,BufWinEnter,CompleteDone <buffer> RefreshInput()
     autocmd TextChangedI,TextChangedP <buffer> MentionComplete()
@@ -278,6 +282,7 @@ def SetupInputWin()
   &l:wincolor = 'ClaudeInput'
   &l:statusline = '%!claude#InputStatusLine()'
   RefreshInput()
+  ExtendedKeys(true)   # (BufEnter has already fired for this first entry)
 enddef
 
 # ---------------------------------------------------------------- look
@@ -397,6 +402,27 @@ enddef
 def SpareRow(lines: list<string>, border: bool): number
   return border && len(lines) > 1 && lines[-1] == '' ? 1 : 0
 enddef
+
+# Ask the terminal to tell Shift-Enter from Enter (modifyOtherKeys, the form
+# tmux with extended-keys and xterm-like terminals understand) while the input
+# box has the focus, and put things back when you leave it.
+def ExtendedKeys(on: bool)
+  if on == ext_keys
+    return
+  endif
+  if on && (!Opt('extended_keys', true) || !util.WantsExtendedKeys(&term, &t_TI, has('gui_running')))
+    return
+  endif
+  silent! echoraw(on ? "\<Esc>[>4;2m" : "\<Esc>[>4;m")
+  ext_keys = on
+enddef
+
+augroup claude_extkeys
+  autocmd!
+  autocmd VimLeavePre,VimSuspend * ExtendedKeys(false)
+  autocmd VimResume,FocusGained * if bufnr() == input_buf | ExtendedKeys(true) | endif
+  autocmd FocusLost * ExtendedKeys(false)
+augroup END
 
 # A newline is inserted first and the window grows afterwards, so Vim scrolls
 # the new line into view in the meantime and the lines above vanish until the

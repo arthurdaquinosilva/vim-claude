@@ -148,7 +148,8 @@ Plug 'arthurdaquinosilva/vim-claude'
 | `<Leader>cm` / `cp`  | choose model / permission mode            |
 | `<Leader>cu`         | rewind files to an earlier message        |
 
-In the input box, `Enter` sends, `Ctrl-J` inserts a newline and `Ctrl-C` stops.
+In the input box, `Enter` sends, `Ctrl-J` or `Shift-Enter` inserts a newline and
+`Ctrl-C` stops.
 In the transcript, `]]`/`[[` jump between messages, `gy` yanks a code block,
 selecting part of a reply and pressing `Enter` quotes it into the input box so
 you can ask about it, and `q` closes the panel.
