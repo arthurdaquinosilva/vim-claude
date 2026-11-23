@@ -352,3 +352,10 @@ def g:Test_Frontmatter_reads_a_key()
   assert_equal('', util.Frontmatter(['---', 'description: >', '  long', '---'], 'description'))
   assert_equal(60, strcharlen(util.Frontmatter(['---', 'description: ' .. repeat('x', 90), '---'], 'description')))
 enddef
+
+def g:Test_FindImageMentions()
+  assert_equal([{path: 'a.png', media: 'image/png'}, {path: 'dir/b.JPG', media: 'image/jpeg'}],
+    util.FindImageMentions('look at @a.png and @dir/b.JPG, plus @a.png again'))
+  assert_equal([{path: '/tmp/x.webp', media: 'image/webp'}], util.FindImageMentions("@/tmp/x.webp\nthanks"))
+  assert_equal([], util.FindImageMentions('mail me@x.png or @notes.txt or a.png'))
+enddef

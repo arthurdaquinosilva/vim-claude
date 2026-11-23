@@ -85,6 +85,17 @@ The statusline shows a spinner and what Claude is doing (thinking, using a
 tool), the model, how full the context window is (ctx 12%), and the
 permission mode. A warning appears when the context is 85% full. Each reply ends with its duration.
 
+Shell commands: a message that starts with `!` runs in your shell, in the
+conversation's directory, instead of going to Claude: `!git status`. The
+output (stderr included) appears under it, and Claude is told what you ran and
+what it printed together with your next message. One command runs at a time,
+messages sent meanwhile wait for it, and it is stopped after
+|g:claude_shell_timeout| seconds. Turn this off with |g:claude_shell_mode|.
+
+Images: `@path/to/pic.png` (also jpg, gif, webp; up to 5 MB) in a message
+attaches the image so Claude can look at it. A file that does not exist is left
+as plain text. Needs the `base64` command.
+
 Rewind: |:ClaudeRewind| (<Leader>cu, or `/rewind`) lists the messages you sent
 in this session. Pick one and the plugin asks the CLI which files changed
 since, shows them with the lines added and removed, and restores them when you
@@ -265,6 +276,9 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_queue_limit*      Most messages that can wait.    Default: 10
 *g:claude_checkpoints*      Let |:ClaudeRewind| restore     Default: v:true
                             files (the CLI snapshots them).
+*g:claude_shell_mode*       `!command` runs in your shell.  Default: v:true
+*g:claude_shell_timeout*    Seconds before it is stopped.   Default: 120
+*g:claude_shell_lines*      Output lines shown for it.      Default: 25
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
 *g:claude_debug_log*        File to append the raw CLI     Default: ''

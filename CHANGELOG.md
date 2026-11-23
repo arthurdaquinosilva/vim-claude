@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `!command` in the input runs in your shell and shows the output; Claude is
+  told what you ran with your next message.
+- `@image.png` mentions attach the image (png, jpg, gif, webp).
+
 - `:ClaudeContinue` and `:ClaudeFork` (`/continue`, `/fork`). A conversation
   stays in the directory it started in; a `:cd` no longer moves it.
 - `@` completion also offers directories.

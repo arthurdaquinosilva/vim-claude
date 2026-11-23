@@ -442,6 +442,26 @@ export def Slice(l: list<string>, s: number, e: number): list<string>
   return e < s || s >= len(l) ? [] : l[s : e]
 enddef
 
+# Images mentioned as @path (png, jpg, gif, webp): [{path, media}].
+export def FindImageMentions(text: string): list<dict<string>>
+  var found: list<dict<string>> = []
+  var seen: dict<bool> = {}
+  var start = 0
+  while true
+    var m = matchstrpos(text, '\c\%(^\|\s\)@\zs\S\+\.\%(png\|jpe\=g\|gif\|webp\)\>', start)
+    if m[1] < 0
+      break
+    endif
+    start = m[2]
+    var ext = tolower(fnamemodify(m[0], ':e'))
+    if !has_key(seen, m[0])
+      seen[m[0]] = true
+      add(found, {path: m[0], media: 'image/' .. (ext == 'jpg' ? 'jpeg' : ext)})
+    endif
+  endwhile
+  return found
+enddef
+
 # Prompt for an inline edit of lines l1..l2 of `all`.
 export def EditPrompt(path: string, ft: string, l1: number, l2: number, all: list<string>, instruction: string): string
   # Give surrounding context, but cap it for huge files.

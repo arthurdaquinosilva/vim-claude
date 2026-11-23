@@ -65,6 +65,8 @@ var hist_loaded = false
 var hist_cwd = ''
 var chat_cwd = ''                       # where the conversation runs; fixed until :ClaudeNew
 var fork_next = false                   # start the next process with --fork-session
+var shell_pending: list<dict<any>> = []  # "!cmd" results Claude has not been told about yet
+var shell_job: job = null_job
 var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for rewinding
 var rewind_cbs: dict<func(dict<any>)> = {}
 var queue: list<dict<string>> = []      # messages typed while Claude was busy
@@ -921,7 +923,7 @@ def ReloadChanged()
   &autoread = ar
 enddef
 
-def SendRaw(payload: string): bool
+def SendRaw(payload: any): bool
   if !EnsureProcess()
     return false
   endif
@@ -1638,11 +1640,16 @@ export def Send(text: string, display: string = '')
   if trim(text) == ''
     return
   endif
+  if text =~ '^!\s*\S' && Opt('shell_mode', true)
+    RunShell(trim(text[1 :]), text)
+    return
+  endif
   var slash = util.ParseSlash(text)
   if !empty(slash) && RunSlash(slash[0], slash[1], text)
     return
   endif
-  if busy
+  if busy || job_status(shell_job) == 'run'
+    # (A running "!command" counts: Claude should hear what it printed.)
     Enqueue(text, display)
     return
   endif
@@ -1662,8 +1669,10 @@ export def Send(text: string, display: string = '')
   for w in ChatWins()
     win_execute(w, 'normal! G')
   endfor
+  var images = empty(slash) ? ImageBlocks(text) : []
   # A command's arguments must stay exactly as typed: no editor context.
-  if !SendRaw(util.ExpandMentions(text, MentionLines) .. (empty(slash) ? EditorContext() : ''))
+  var body = (empty(slash) ? ShellContext() : '') .. util.ExpandMentions(text, MentionLines) .. (empty(slash) ? EditorContext() : '')
+  if !SendRaw(empty(images) ? body : [{type: 'text', text: body}] + images)
     Info('✖ Not sent')
     queue = []
   endif
@@ -1701,7 +1710,7 @@ export def Unqueue()
 enddef
 
 def DrainQueue()
-  if busy || empty(queue)
+  if busy || empty(queue) || job_status(shell_job) == 'run'
     return
   endif
   var next = remove(queue, 0)
@@ -2002,6 +2011,7 @@ export def NewChat()
   turns = []
   chat_cwd = ''
   fork_next = false
+  shell_pending = []
   file_cache = []
   session_id = ''
   model_name = ''
@@ -2238,6 +2248,109 @@ def MentionComplete()
   complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
 enddef
 
+# ---------------------------------------------------------------- !shell, images
+
+# "!cmd" runs in your shell, in the conversation's directory; the output is
+# shown here and handed to Claude with your next message.
+def RunShell(cmd: string, text: string)
+  if busy
+    Warn('wait for Claude to finish before running a shell command')
+    return
+  endif
+  if job_status(shell_job) == 'run'
+    Warn('a shell command is still running')
+    return
+  endif
+  EnsureChatBuf()
+  if !IsOpen()
+    Open(false)
+  endif
+  Remember(text)
+  RenderUser(text)
+  for w in ChatWins()
+    win_execute(w, 'normal! G')
+  endfor
+  var lines: list<string> = []
+  var started = reltime()
+  shell_job = job_start(['sh', '-c', 'exec 2>&1; ' .. cmd], {
+    in_io: 'null', out_mode: 'nl', err_mode: 'nl', cwd: ChatDir(), noblock: true,
+    out_cb: (_, l) => {
+      if len(lines) < 5000
+        add(lines, l)
+      endif
+    },
+    exit_cb: (_, code) => {
+      # Let the rest of the output arrive first.
+      timer_start(50, (_) => FinishShell(cmd, lines, code, started))
+    },
+  })
+  if job_status(shell_job) == 'fail'
+    Info('✖ could not run: ' .. cmd)
+    return
+  endif
+  var j = shell_job
+  timer_start(Opt('shell_timeout', 120) * 1000, (_) => {
+    if job_status(j) == 'run'
+      job_stop(j, 'kill')
+    endif
+  })
+enddef
+
+def FinishShell(cmd: string, lines: list<string>, code: number, started: list<any>)
+  var out = join(lines, "\n")
+  var items = util.ToolResult('Bash', {command: cmd}, '', {stdout: out, stderr: ''}, Opt('shell_lines', 25))
+  ToolDetail(items)
+  if code != 0
+    Info('✖ exit ' .. code)
+  endif
+  add(shell_pending, {cmd: cmd, out: out, code: code})
+  if !empty(queue)
+    timer_start(0, (_) => DrainQueue())
+  endif
+enddef
+
+# What the shell commands you ran since your last message printed.
+def ShellContext(): string
+  if empty(shell_pending)
+    return ''
+  endif
+  var parts: list<string> = []
+  for p in shell_pending
+    var out = p.out
+    var ls = split(out, "\n", 1)
+    if len(ls) > 200
+      out = join(ls[: 99], "\n") .. "\n[... " .. (len(ls) - 200) .. " lines omitted ...]\n" .. join(ls[-100 :], "\n")
+    endif
+    add(parts, 'I ran `' .. p.cmd .. '` in my terminal' .. (p.code != 0 ? ' (exit code ' .. p.code .. ')' : '')
+      .. ":\n" .. util.FenceFor([out]) .. "\n" .. out .. "\n" .. util.FenceFor([out]))
+  endfor
+  shell_pending = []
+  return join(parts, "\n\n") .. "\n\n"
+enddef
+
+# @pic.png in a message attaches the image itself, not just its name.
+def ImageBlocks(text: string): list<dict<any>>
+  var blocks: list<dict<any>> = []
+  for m in util.FindImageMentions(text)
+    var path = m.path =~ '^[/~]' ? expand(m.path) : ChatDir() .. '/' .. m.path
+    if !filereadable(path)
+      continue
+    endif
+    if getfsize(path) > 5 * 1024 * 1024
+      Info('✖ not attached (over 5 MB): ' .. m.path)
+      continue
+    endif
+    var data = system('base64 < ' .. shellescape(path) .. " | tr -d '\\n'")
+    if v:shell_error != 0 || data == ''
+      Info('✖ could not read image ' .. m.path)
+      continue
+    endif
+    add(blocks, {type: 'image', source: {type: 'base64', media_type: m.media, data: data}})
+    Info('↳ attached image ' .. m.path)
+  endfor
+  return blocks
+enddef
+
 # ---------------------------------------------------------------- rewind
 
 # The CLI echoes each message with an id; remember it for the matching turn.
@@ -2249,7 +2362,7 @@ def NoteReplay(ev: dict<any>)
     return
   endif
   for t in turns
-    if t.uuid == '' && stridx(text, t.text) == 0
+    if t.uuid == '' && stridx(text, t.text) >= 0
       t.uuid = uuid
       return
     endif

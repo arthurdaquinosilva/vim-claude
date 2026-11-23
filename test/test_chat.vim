@@ -902,3 +902,70 @@ def g:Test_mentions_complete_directories_too()
   assert_equal(['src/deep/', 'src/deep/a.txt'], sort(filter(copy(words.words), (_, w) => w =~ '^src/deep')))
   assert_true(index(words.words, 'src/') >= 0)
 enddef
+
+def Prompts(): list<any>
+  return mapnew(filter(g:FakeLog(), (_, l) => l =~ '^STDIN .*"role":"user"'), (_, l) => json_decode(l[6 :]).message.content)
+enddef
+
+def g:Test_bang_runs_a_shell_command_and_tells_claude_next_time()
+  Reset()
+  claude.Send('!echo hello from shell; echo oops >&2; exit 3')
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '    ⎿ hello from shell') >= 0")
+  var chat = join(ChatLines(), "\n")
+  assert_match('❯ You:\n\n  !echo hello from shell', chat)
+  assert_match('      oops', chat)               # stderr is merged
+  assert_match('✖ exit 3', chat)
+  assert_equal(0, len(Prompts()))                 # nothing went to Claude yet
+  claude.Send('what happened?')
+  g:WaitFor('!claude#Busy()')
+  var sent = Prompts()[0]
+  assert_match('I ran `echo hello from shell; echo oops >&2; exit 3` in my terminal (exit code 3)', sent)
+  assert_match('hello from shell\noops', sent)
+  assert_match('what happened?', sent)
+  # Only told once.
+  claude.Send('and now?')
+  g:WaitFor('!claude#Busy()')
+  assert_notmatch('I ran', Prompts()[1])
+enddef
+
+def g:Test_bang_runs_in_the_conversation_directory_and_not_while_busy()
+  Reset()
+  claude.Send('!pwd')
+  g:WaitFor("join(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), ' ') =~ '⎿ /'")
+  assert_match('⎿ ' .. getcwd(), join(ChatLines(), "\n"))
+  claude.Send('SLOW busy')
+  claude.Send('!echo no')
+  assert_match('wait for Claude to finish before running a shell command', execute('messages'))
+  claude.Unqueue()
+  StopAndWait()
+enddef
+
+def g:Test_image_mentions_are_attached_as_image_blocks()
+  Reset()
+  var img = tempname() .. '.png'
+  writefile(0z89504E47, img, 'b')
+  claude.Send('what is in @' .. img .. '?')
+  g:WaitFor('!claude#Busy()')
+  var content = Prompts()[0]
+  assert_equal(2, len(content))
+  assert_equal('text', content[0].type)
+  assert_match('what is in @', content[0].text)
+  assert_equal({type: 'image', source: {type: 'base64', media_type: 'image/png', data: 'iVBORw=='}}, content[1])
+  assert_match('↳ attached image ' .. img, join(ChatLines(), "\n"))
+  # A missing file is left as plain text.
+  claude.Send('and @/no/such/pic.png')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(v:t_string, type(Prompts()[1]))
+  delete(img)
+enddef
+
+def g:Test_message_typed_during_a_shell_command_waits_for_its_output()
+  Reset()
+  claude.Send('!sleep 0.4; echo late output')
+  claude.Send('did it work?')
+  assert_equal(0, len(Prompts()))
+  assert_match('⧗ Queued: did it work?', join(ChatLines(), "\n"))
+  g:WaitFor('len(g:FakeLog()) > 0 && !claude#Busy() && len(filter(g:FakeLog(), "v:val =~ ''^STDIN ''")) == 1', 6000)
+  assert_match('late output', Prompts()[0])
+  assert_match('did it work?', Prompts()[0])
+enddef

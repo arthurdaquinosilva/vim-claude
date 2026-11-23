@@ -45,6 +45,9 @@ run commands when you allow it, and keep context across messages.
 - **Rewind.** `:ClaudeRewind` (`<Leader>cu`, or `/rewind`) restores your files
   to how they were before any message of the session, after showing which
   files would change. The conversation is kept.
+- **Shell and images.** `!git status` in the input box runs the command in
+  your shell, shows the output, and tells Claude about it with your next
+  message. `@screenshot.png` attaches the image itself.
 - **Type ahead.** Messages sent while Claude is working are queued and go
   out in order when it finishes (`:ClaudeUnqueue` drops them).
 - **Input history.** `Ctrl-P` and `Ctrl-N` step through earlier messages and
