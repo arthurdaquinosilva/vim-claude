@@ -1,16 +1,20 @@
 name: test
 on: [push, pull_request]
 jobs:
-  test:
+  # The oldest Vim we claim to support: what Ubuntu 24.04 LTS ships.
+  distro-vim:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y vim
+      - run: vim --version | head -3
+      - run: test/run.sh
+  latest-vim:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        vim: [v9.0.1378, stable]
     steps:
       - uses: actions/checkout@v4
       - uses: rhysd/action-setup-vim@v1
         with:
-          version: ${{ matrix.vim }}
-      - run: vim --version | head -5
+          version: stable
+      - run: vim --version | head -3
       - run: test/run.sh

@@ -15,8 +15,9 @@ CONTENTS                                                      *claude-contents*
 ==============================================================================
 1. REQUIREMENTS                                           *claude-requirements*
 
-- Vim 9.0.1000+ with |+job|, |+channel|, |+timers|, |+popupwin| and
-  |+textprop|. Run |:ClaudeHealth| to check.
+- Vim 9.0+ with |+job|, |+channel|, |+timers|, |+popupwin| and |+textprop|.
+  Tested on 9.1.0016 (Ubuntu 24.04 LTS) and the latest release. Run
+  |:ClaudeHealth| to check.
   Neovim and Windows are not supported.
 - The Claude Code CLI (`claude`) on your $PATH, already logged in. The
   plugin drives `claude -p` in stream-json mode, so it uses your existing

@@ -55,8 +55,9 @@ run commands when you allow it, and keep context across messages.
 
 ## Install
 
-Requires Vim 9.0.1000+ (`+job +channel +timers +popupwin +textprop`; Neovim
-and Windows are not supported) and
+Requires Vim 9.0+ with `+job +channel +timers +popupwin +textprop` (tested on
+9.1.0016, the Vim in Ubuntu 24.04 LTS, and the latest release; Neovim and
+Windows are not supported) and
 [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in.
 
 ```sh
