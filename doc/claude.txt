@@ -15,7 +15,9 @@ CONTENTS                                                      *claude-contents*
 ==============================================================================
 1. REQUIREMENTS                                           *claude-requirements*
 
-- Vim 9.0+ with |+job|, |+channel|, |+timers| and |+popupwin|.
+- Vim 9.1.0120+ with |+job|, |+channel|, |+timers|, |+popupwin| and
+  |+textprop| (|getregion()| is used). Run |:ClaudeHealth| to check.
+  Neovim and Windows are not supported.
 - The Claude Code CLI (`claude`) on your $PATH, already logged in. The
   plugin drives `claude -p` in stream-json mode, so it uses your existing
   subscription or API key and runs Claude Code's tools in Vim's |getcwd()|.
@@ -123,6 +125,7 @@ are reloaded. The starting mode is |g:claude_permission_mode|; switch with
 :ClaudeAccept :ClaudeReject  *:ClaudeAccept* *:ClaudeReject*
 :ClaudeEditCancel            *:ClaudeEditCancel*  Cancel a running edit.
 :ClaudeStop                  *:ClaudeStop*     Interrupt the current reply.
+:ClaudeHealth                *:ClaudeHealth*   Check Vim, the CLI and the login.
 :ClaudeNew                   *:ClaudeNew*      Start a new conversation.
 :ClaudeResume                *:ClaudeResume*   Reopen an earlier conversation.
 :ClaudeModel [name]          *:ClaudeModel*    opus, sonnet, haiku, default,
@@ -173,6 +176,8 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
                             replies as aligned box tables.
 *g:claude_show_cost*        Show API cost in reply footers. Default: v:false
 *g:claude_extra_args*       Extra CLI arguments (list).     Default: []
+*g:claude_debug_log*        File to append the raw CLI     Default: ''
+                            events to (for bug reports).
 *g:claude_map_prefix*       Prefix for default mappings.    Default: '<Leader>c'
 *g:claude_no_mappings*      Skip default mappings.          Default: v:false
 

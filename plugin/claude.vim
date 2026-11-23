@@ -2,7 +2,28 @@ vim9script noclear
 # claude.vim — Claude Code chat panel, explain and inline edit for Vim 9.
 # See :help claude
 
-if exists('g:loaded_claude') || v:version < 900
+if exists('g:loaded_claude')
+  finish
+endif
+
+# Everything the plugin relies on; say what is missing instead of failing later.
+var missing: list<string> = []
+if v:version < 900
+  add(missing, 'Vim 9.0+')
+else
+  for feat in ['job', 'channel', 'timers', 'popupwin', 'textprop']
+    if !has(feat)
+      add(missing, '+' .. feat)
+    endif
+  endfor
+  if !exists('*getregion')
+    add(missing, 'getregion() (Vim 9.1.0120+)')
+  endif
+endif
+if !empty(missing)
+  echohl WarningMsg
+  echomsg 'claude.vim: disabled, this Vim lacks ' .. join(missing, ', ')
+  echohl None
   finish
 endif
 g:loaded_claude = 1
@@ -23,6 +44,7 @@ command! -nargs=0 ClaudeReject edit.Reject()
 command! -nargs=0 ClaudeNew claude.NewChat()
 command! -nargs=0 ClaudeStop claude.Stop()
 command! -nargs=0 ClaudeResume claude.Resume()
+command! -nargs=0 ClaudeHealth claude.Health()
 command! -nargs=? -complete=custom,claude#CompleteModels ClaudeModel claude.SetModel(<q-args>)
 command! -nargs=? -complete=custom,claude#CompleteModes ClaudeMode claude.SetMode(<q-args>)
 

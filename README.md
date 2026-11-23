@@ -31,7 +31,8 @@ run commands when you allow it, and keep context across messages.
 
 ## Install
 
-Requires Vim 9.0+ (`+job +channel +timers +popupwin`) and
+Requires Vim 9.1.0120+ (`+job +channel +timers +popupwin +textprop`; Neovim
+and Windows are not supported) and
 [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in.
 
 ```sh
@@ -70,7 +71,9 @@ let g:claude_map_prefix = '<Leader>c'       " prefix for the mappings above
 let g:markdown_fenced_languages = ['python', 'javascript', 'vim', 'sh']
 ```
 
-The full reference is in `:help claude`.
+Run `:ClaudeHealth` if something does not work, and set
+`g:claude_debug_log = '/tmp/claude.log'` to capture the raw CLI events for a
+bug report. The full reference is in `:help claude`.
 
 ## Tests
 

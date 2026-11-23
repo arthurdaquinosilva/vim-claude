@@ -801,6 +801,7 @@ def EnsureProcess(): bool
 enddef
 
 def AddStderr(msg: string)
+  DebugLog('err', msg)
   add(stderr_tail, msg)
   if len(stderr_tail) > 20
     remove(stderr_tail, 0)
@@ -850,11 +851,20 @@ def IsSubagent(ev: dict<any>): bool
   return type(get(ev, 'parent_tool_use_id', v:null)) == v:t_string
 enddef
 
+def DebugLog(tag: string, line: string)
+  var f = Opt('debug_log', '')
+  if f != ''
+    silent! writefile([strftime('%H:%M:%S ') .. tag .. ' ' .. line], expand(f), 'a')
+  endif
+enddef
+
 def OnEvent(line: string)
+  DebugLog('out', line)
   var ev: any
   try
     ev = json_decode(line)
   catch
+    DebugLog('bad-json', line)
     return
   endtry
   if type(ev) != v:t_dict
@@ -1355,6 +1365,40 @@ def MentionComplete()
   var base = strpart(m[0], 1)
   var files = ProjectFiles()
   complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
+enddef
+
+# ---------------------------------------------------------------- health
+
+# :ClaudeHealth — check that the environment can run the plugin.
+export def Health()
+  var rows: list<list<string>> = []
+  def Row(ok: bool, what: string, detail: string = '')
+    add(rows, [ok ? 'OK  ' : 'FAIL', what .. (detail != '' ? ': ' .. detail : '')])
+  enddef
+  Row(true, 'Vim', string(v:versionlong))
+  for feat in ['job', 'channel', 'timers', 'popupwin', 'textprop']
+    Row(has(feat) == 1, '+' .. feat)
+  endfor
+  Row(exists('*getregion') == 1, 'getregion()', 'needs Vim 9.1.0120+')
+  var cmd = Opt('cmd', 'claude')
+  var exe = type(cmd) == v:t_list ? cmd[0] : cmd
+  if executable(exe)
+    var ver = trim(system((type(cmd) == v:t_list ? join(map(copy(cmd), (_, c) => shellescape(c)), ' ') : shellescape(cmd)) .. ' --version 2>&1'))
+    Row(v:shell_error == 0, exe, ver)
+  else
+    Row(false, exe, 'not on $PATH (set g:claude_cmd)')
+  endif
+  Row(isdirectory(expand('~/.claude')) == 1, '~/.claude', 'created by `claude` on first login')
+  Row(executable('git') == 1, 'git', 'optional, used for @file completion')
+  Row(true, 'process', Running() ? 'running, session ' .. (session_id == '' ? '(none yet)' : session_id) : 'not started (starts on first message)')
+  if Opt('debug_log', '') != ''
+    Row(true, 'g:claude_debug_log', expand(Opt('debug_log', '')))
+  endif
+  for [mark, text] in rows
+    echohl (mark == 'OK  ' ? 'None' : 'ErrorMsg')
+    echo mark .. ' ' .. text
+    echohl None
+  endfor
 enddef
 
 # ---------------------------------------------------------------- tests
