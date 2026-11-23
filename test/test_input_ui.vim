@@ -2,6 +2,11 @@ vim9script
 import autoload 'claude.vim'
 import autoload 'claude/util.vim'
 
+def StopAndWait()
+  claude.Stop()
+  g:WaitFor('!claude#Busy()')
+enddef
+
 def Placeholder(buf: number): string
   var p = filter(prop_list(1, {bufnr: buf}), (_, x) => get(x, 'type', '') == 'claude_placeholder')
   return empty(p) ? '' : p[0].text
@@ -78,7 +83,7 @@ def g:Test_busy_placeholder_and_bars()
   assert_match('^  ctrl-c to stop \+⠋ writing… · ask before edits $', wide)
   assert_equal(rule, Plain(claude.StatusLine(chat_win)))
 
-  claude.Stop()
+  StopAndWait()
   assert_equal('Ask Claude…', Placeholder(buf))
   assert_notmatch('ctrl-c\|…', Plain(claude.InputStatusLine(input_win)))
 enddef

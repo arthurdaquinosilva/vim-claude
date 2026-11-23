@@ -100,16 +100,31 @@ If the buffer changes while Claude is working, the proposal is discarded.
 ==============================================================================
 5. PERMISSIONS                                            *claude-permissions*
 
-Claude Code asks before editing files or running commands. When a tool call
-is blocked, a popup offers:
+Claude Code asks before editing files or running commands. The request
+reaches Vim while Claude waits, and a popup shows exactly what it wants to do:
+the lines it would change as a diff, the command it would run, or the other
+arguments. Answer with one key:
 
-  Allow for this session    allow that tool (for Bash: that exact command)
-  Allow all file edits      switch to acceptEdits mode
-  Deny
+  y  1           allow this call
+  a  2           allow it for the rest of the session (for Bash: that exact
+                 command); Claude is not asked again, nothing restarts
+  e  3           accept all edits (switch to acceptEdits mode); only offered
+                 for Edit and Write
+  n  Esc         deny; Claude is told and carries on without it
 
-After you allow, Claude retries automatically, and buffers for files it changed
-are reloaded. The starting mode is |g:claude_permission_mode|; switch with
-|:ClaudeMode|.
+Several requests at once are shown one after the other. <C-c> in the panel
+(or |:ClaudeStop|) while a popup is open denies the waiting requests and
+interrupts. The starting mode is |g:claude_permission_mode|; switch with
+|:ClaudeMode|. Files Claude changed are reloaded when the reply ends.
+
+|g:claude_permission_prompt| = 'retry' restores the older behavior for CLIs
+that cannot ask: Claude is denied, the popup comes after the reply, and the
+plugin asks Claude to retry once you allow.
+
+Stopping: <C-c> asks Claude to interrupt the reply. The session and its
+prompt cache stay alive, so the next message continues without a restart. If
+Claude does not stop within three seconds the process is killed (the
+conversation is resumed on the next message).
 
 ==============================================================================
 6. COMMANDS                                                   *claude-commands*
@@ -157,6 +172,9 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_model*            Model alias or id.              Default: CLI default
 *g:claude_edit_model*       Model for |:ClaudeEdit|.        Default: g:claude_model
 *g:claude_permission_mode*  Starting mode.                  Default: 'default'
+*g:claude_permission_prompt* 'host': the CLI asks Vim and    Default: 'host'
+                            waits for the answer; 'retry':
+                            ask after the reply, then retry.
 *g:claude_position*         'right', 'left' or 'bottom'.    Default: 'right'
 *g:claude_width*            Panel width: columns, or a      Default: 0.5
                             fraction of the screen (0.5 =

@@ -255,3 +255,28 @@ def g:Test_FenceAround()
   assert_equal({}, util.FenceAround(lines, 1, 3))
   assert_equal({}, util.FenceAround(lines, 6, 6))
 enddef
+
+def g:Test_PermissionPreview_shows_the_change()
+  assert_equal(['- a', '- b', '+ c'],
+    util.PermissionPreview('Edit', {file_path: 'x', old_string: "a\nb", new_string: 'c'}))
+  assert_equal(['+ one', '+ two'], util.PermissionPreview('Write', {file_path: 'x', content: "one\ntwo"}))
+  assert_equal(['# Run tests', 'npm test'],
+    util.PermissionPreview('Bash', {command: 'npm test', description: 'Run tests'}))
+  assert_equal(['url: https://x.dev'], util.PermissionPreview('WebFetch', {url: 'https://x.dev'}))
+enddef
+
+def g:Test_PermissionPreview_truncates_long_input()
+  var big = join(map(range(30), (_, i) => 'l' .. i), "\n")
+  var out = util.PermissionPreview('Write', {content: big}, 5)
+  assert_equal(5, len(out))
+  assert_equal('… 26 more lines', out[-1])
+  var wide = util.PermissionPreview('Bash', {command: repeat('x', 300)})
+  assert_equal(100, strcharlen(wide[0]))
+enddef
+
+def g:Test_AllowRule_scopes_bash_to_the_command()
+  assert_equal({toolName: 'Bash', ruleContent: 'npm test'}, util.AllowRule('Bash', {command: 'npm test'}))
+  assert_equal({toolName: 'Edit'}, util.AllowRule('Edit', {file_path: 'a'}))
+  assert_true(util.IsEditTool('Write'))
+  assert_false(util.IsEditTool('Bash'))
+enddef

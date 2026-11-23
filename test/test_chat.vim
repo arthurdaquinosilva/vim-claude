@@ -5,6 +5,11 @@ def ChatLines(): list<string>
   return getbufline(claude.Debug().chat_buf, 1, '$')
 enddef
 
+def StopAndWait()
+  claude.Stop()
+  g:WaitFor('!claude#Busy()')
+enddef
+
 def Reset()
   claude.NewChat()
   writefile([], $FAKE_CLAUDE_LOG)
@@ -85,12 +90,13 @@ def g:Test_stop_interrupts_a_running_turn()
   claude.Send('SLOW please')
   g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
   assert_true(claude.Debug().busy)
-  claude.Stop()
+  StopAndWait()
   assert_false(claude.Debug().busy)
   assert_equal('  ■ Interrupted', ChatLines()[-1])
 enddef
 
-def g:Test_permission_denial_prompts_and_allow_retries()
+def g:Test_retry_mode_denial_prompts_and_allow_retries()
+  g:claude_permission_prompt = 'retry'
   Reset()
   claude.Send('PERM edit it')
   g:WaitFor('!empty(popup_list())')
@@ -106,6 +112,96 @@ def g:Test_permission_denial_prompts_and_allow_retries()
   g:WaitFor('!empty(popup_list())')
   popup_close(popup_list()[0], 3)  # Deny the second time
   assert_equal('  ✗ Denied', ChatLines()[-1])
+  unlet g:claude_permission_prompt
+enddef
+
+def Replies(): list<dict<any>>
+  return mapnew(filter(g:FakeLog(), (_, l) => l =~ '^STDIN {"type":"control_response"'),
+    (_, l) => json_decode(l[6 :]).response)
+enddef
+
+def Press(key: string)
+  g:WaitFor('!empty(popup_list())')
+  feedkeys(key, 'tx')
+enddef
+
+def g:Test_permission_prompt_answers_the_cli_in_place()
+  Reset()
+  claude.Send('CTRLPERM edit it')
+  g:WaitFor('!empty(popup_list())')
+  assert_match('--permission-prompt-tool stdio', filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')[0])
+  var popup = popup_list()[0]
+  var text = join(getbufline(winbufnr(popup), 1, '$'), "\n")
+  # The popup shows the actual change.
+  assert_match('- two', text)
+  assert_match('+ 2', text)
+  assert_match('^ Edit a.txt ', popup_getoptions(popup).title)
+  assert_true(claude.Debug().busy)
+  # Allow for this session -> a rule that applies in the running process.
+  feedkeys('a', 'tx')
+  # Second request (Bash) is shown next, no restart in between.
+  g:WaitFor('!empty(popup_list())')
+  assert_match('# Run tests', join(getbufline(winbufnr(popup_list()[0]), 1, '$'), "\n"))
+  feedkeys('n', 'tx')
+  g:WaitFor('!claude#Busy()')
+  var r = Replies()
+  assert_equal('allow', r[0].response.behavior)
+  assert_equal([{type: 'addRules', rules: [{toolName: 'Edit'}], behavior: 'allow', destination: 'session'}],
+    r[0].response.updatedPermissions)
+  assert_equal('r1', r[0].request_id)
+  assert_equal('deny', r[1].response.behavior)
+  assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')))
+  var chat = join(ChatLines(), "\n")
+  assert_match('✓ Allowed for this session: Edit a.txt', chat)
+  assert_match('✗ Denied: Bash npm test', chat)
+  # Denials the user already answered are not asked again after the turn.
+  assert_notmatch('Needs permission', chat)
+  assert_equal([], popup_list())
+enddef
+
+def g:Test_permission_prompt_accept_edits_changes_mode_without_restart()
+  Reset()
+  claude.Send('CTRLPERM edit it')
+  Press('e')
+  Press('y')
+  g:WaitFor('!claude#Busy()')
+  assert_equal('acceptEdits', claude.Debug().mode)
+  assert_equal([{type: 'setMode', mode: 'acceptEdits', destination: 'session'}],
+    Replies()[0].response.updatedPermissions)
+  claude.SetMode('default')
+enddef
+
+def g:Test_escape_denies_a_permission_prompt()
+  Reset()
+  claude.Send('CTRLPERM edit it')
+  Press("\<Esc>")
+  Press("n")
+  g:WaitFor('!claude#Busy()')
+  assert_equal(['deny', 'deny'], mapnew(Replies(), (_, r) => r.response.behavior))
+enddef
+
+def g:Test_stop_sends_interrupt_and_keeps_the_process()
+  Reset()
+  claude.Send('SLOW please')
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
+  claude.Stop()
+  assert_true(claude.Debug().busy)  # not over until the CLI ends the turn
+  g:WaitFor('!claude#Busy()')
+  assert_equal('  ■ Interrupted', ChatLines()[-1])
+  assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '"subtype":"interrupt"')))
+  # Same process: the next message does not start a new one.
+  claude.Send('hello again')
+  g:WaitFor('!claude#Busy()')
+  assert_equal(1, len(filter(g:FakeLog(), (_, l) => l =~ '^ARGS ')))
+enddef
+
+def g:Test_stop_kills_a_process_that_ignores_the_interrupt()
+  Reset()
+  claude.Send('SLOW NOINT please')
+  g:WaitFor("index(getbufline(" .. claude.Debug().chat_buf .. ", 1, '$'), '  Working') >= 0")
+  claude.Stop()
+  g:WaitFor('!claude#Busy()', 6000)
+  assert_equal('  ■ Interrupted', ChatLines()[-1])
 enddef
 
 def g:Test_scrolled_back_window_is_not_dragged_to_bottom()
@@ -251,7 +347,7 @@ def g:Test_headers_show_time_and_live_indicator()
   # Your message is dimmed.
   assert_equal(1, len(Props(you + 2, 'claude_user')))
   assert_equal(3, Props(you + 2, 'claude_user')[0].col)
-  claude.Stop()
+  StopAndWait()
   assert_equal([], Props(hdr, 'claude_live'))
 enddef
 
@@ -263,7 +359,7 @@ def g:Test_claude_header_appears_before_first_token()
   assert_equal(['✻ Claude:', ''], lines[-2 :])
   var live = filter(prop_list(len(lines) - 1, {bufnr: claude.Debug().chat_buf}), (_, p) => p.type == 'claude_live')
   assert_match('thinking…$', live[0].text)
-  claude.Stop()
+  StopAndWait()
 enddef
 
 def g:Test_code_fences_get_language_syntax()

@@ -19,9 +19,12 @@ run commands when you allow it, and keep context across messages.
   Unsaved buffer contents are attached. Typing `@` completes project files.
 - **Inline edit.** `<Leader>ci` asks for an instruction, then shows a diff tab.
   `ga` accepts as one undo step, `gr` rejects, and `do`/`dp` take single hunks.
-- **Permissions.** When Claude is blocked from editing or running a command, a
-  popup lets you allow it for the session, switch to acceptEdits, or deny.
-  After you allow, Claude retries and changed buffers are reloaded.
+- **Permissions.** Like the CLI, Claude asks before it edits or runs
+  something and waits. A popup shows the diff or command; `y` allows, `a`
+  allows it for the session, `e` accepts all edits, `n` denies. Nothing
+  restarts, and changed buffers are reloaded.
+- **Interrupt.** `Ctrl-C` stops a reply in under a second and keeps the
+  session (and its prompt cache) alive.
 - **Tool activity.** Lines such as `● Read src/app.py` and `● Bash npm test`
   show what Claude did. The statusline has a spinner, the model and the
   permission mode.

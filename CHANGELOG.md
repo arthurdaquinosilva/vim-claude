@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Permission prompts are now synchronous (`--permission-prompt-tool stdio`):
+  Claude waits while a popup shows the diff or command, and the answer
+  (allow, allow for the session, accept edits, deny) applies in place, with
+  no retry turn and no restart. The previous flow remains available with
+  `g:claude_permission_prompt = 'retry'`.
+- `Ctrl-C` sends a control interrupt instead of killing the process, so the
+  session and prompt cache survive; a stuck process is killed after 3s.
+- Stopping a process no longer blocks Vim.
+
 - Require the Vim features the plugin uses (`+job +channel +timers +popupwin
   +textprop`, `getregion()`) and say so clearly when they are missing.
 - Add `:ClaudeHealth` to check the environment, and `g:claude_debug_log` to

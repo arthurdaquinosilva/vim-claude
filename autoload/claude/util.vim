@@ -139,6 +139,55 @@ export def DenialRule(denial: dict<any>): string
   return name
 enddef
 
+# Lines describing what a tool call is about to do, for the permission popup:
+# edits as "- old" / "+ new", commands as they are, anything else as key: value.
+export def PermissionPreview(name: string, input: any, max: number = 14): list<string>
+  var inp = type(input) == v:t_dict ? input : {}
+  var out: list<string> = []
+  var Lines = (text: any, prefix: string): list<string> =>
+    type(text) == v:t_string && text != '' ? mapnew(split(text, "\n", 1), (_, l) => prefix .. l) : []
+  if name == 'Edit'
+    out = Lines(get(inp, 'old_string', ''), '- ') + Lines(get(inp, 'new_string', ''), '+ ')
+  elseif name == 'MultiEdit'
+    for e in get(inp, 'edits', [])
+      out += Lines(get(e, 'old_string', ''), '- ') + Lines(get(e, 'new_string', ''), '+ ')
+    endfor
+  elseif name == 'Write'
+    out = Lines(get(inp, 'content', ''), '+ ')
+  elseif name == 'NotebookEdit'
+    out = Lines(get(inp, 'new_source', ''), '+ ')
+  elseif name == 'Bash'
+    out = split(get(inp, 'command', ''), "\n", 1)
+    var d = get(inp, 'description', '')
+    if type(d) == v:t_string && d != ''
+      out = ['# ' .. d] + out
+    endif
+  else
+    for k in sort(keys(inp))
+      var v = inp[k]
+      add(out, k .. ': ' .. (type(v) == v:t_string ? substitute(v, '\n', ' ', 'g') : string(v)))
+    endfor
+  endif
+  if len(out) > max
+    var more = len(out) - (max - 1)
+    out = out[: max - 2] + ['… ' .. more .. ' more line' .. (more == 1 ? '' : 's')]
+  endif
+  return map(out, (_, l) => strcharlen(l) > 100 ? strcharpart(l, 0, 99) .. '…' : l)
+enddef
+
+# Session permission rule for an approved call, in the CLI's rule format.
+export def AllowRule(name: string, input: any): dict<any>
+  var inp = type(input) == v:t_dict ? input : {}
+  if name == 'Bash' && get(inp, 'command', '') != ''
+    return {toolName: name, ruleContent: inp.command}
+  endif
+  return {toolName: name}
+enddef
+
+export def IsEditTool(name: string): bool
+  return index(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'], name) >= 0
+enddef
+
 # Strip one surrounding markdown fence from a model reply, if present.
 export def StripFences(text: string): string
   var lines = split(text, "\n", 1)

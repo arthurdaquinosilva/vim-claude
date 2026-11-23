@@ -24,7 +24,27 @@ while IFS= read -r line; do
     se '{"type":"message_start"}'
     se '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'
     se '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Working"}}'
-    sleep 30
+    # Wait for an interrupt like the real CLI (which ends the turn with an error result).
+    if read -t 30 -r next; then
+      printf '%s\n' "STDIN $next" >> "$log"
+      if [[ "$next" == *'"interrupt"'* ]]; then
+        [[ "$line" == *NOINT* ]] && { sleep 30; continue; }
+        echo '{"type":"control_response","response":{"subtype":"success","request_id":"x","response":{"still_queued":[]}}}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":null,"permission_denials":[]}'
+      fi
+    fi
+    continue
+  fi
+  if [[ "$line" == *CTRLPERM* ]]; then
+    # Synchronous permission prompts: two requests, then act on the answers.
+    echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"a.txt"}}]}}'
+    echo '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Edit","input":{"file_path":"a.txt","old_string":"one\ntwo","new_string":"one\n2"},"permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"t1"}}'
+    echo '{"type":"control_request","request_id":"r2","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"npm test","description":"Run tests"},"tool_use_id":"t2"}}'
+    for _ in 1 2; do
+      read -r ans
+      printf '%s\n' "STDIN $ans" >> "$log"
+    done
+    echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","permission_denials":[{"tool_name":"Bash","tool_use_id":"t2","tool_input":{"command":"npm test"}}]}'
     continue
   fi
   if [[ "$line" == *TABLE* ]]; then

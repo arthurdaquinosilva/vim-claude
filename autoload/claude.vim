@@ -24,7 +24,11 @@ var session_id = ''
 var model_name = ''         # as reported by the CLI
 var model = ''              # as requested by the user ('' = CLI default)
 var perm_mode = ''
-var session_allowed: list<string> = []
+var session_allowed: list<string> = []   # --allowedTools rules ('retry' prompts only)
+var prompts: list<dict<any>> = []        # tool permission requests waiting for an answer
+var prompt_popup = 0                     # popup showing prompts[0]
+var interrupting = false                 # an interrupt was sent, waiting for the turn to end
+var interrupt_timer = 0
 
 var busy = false
 var status_text = ''
@@ -60,6 +64,12 @@ enddef
 
 def Model(): string
   return model != '' ? model : Opt('model', '')
+enddef
+
+# 'host' (default): the CLI asks us before each tool call and waits for the
+# answer. 'retry': run without that, then re-send after a denial was allowed.
+def HostPrompts(): bool
+  return Opt('permission_prompt', 'host') != 'retry'
 enddef
 
 def Warn(msg: string)
@@ -733,6 +743,9 @@ def BuildArgs(): list<string>
   if Mode() != 'default'
     args += ['--permission-mode', Mode()]
   endif
+  if HostPrompts()
+    args += ['--permission-prompt-tool', 'stdio']
+  endif
   if session_id != ''
     args += ['--resume', session_id]
   endif
@@ -748,15 +761,21 @@ def StopProcess()
     return
   endif
   gen += 1  # silence its callbacks
-  job_stop(job, 'term')
-  var n = 0
-  while job_status(job) == 'run' && n < 100
-    sleep 10m
-    n += 1
-  endwhile
-  if job_status(job) == 'run'
-    job_stop(job, 'kill')
-  endif
+  ClosePrompts()
+  ClearInterrupt()
+  var j = job
+  job_stop(j, 'term')
+  # Don't wait for it: its callbacks are silenced. Make sure it is gone soon.
+  timer_start(1000, (_) => {
+    if job_status(j) == 'run'
+      job_stop(j, 'kill')
+    endif
+  })
+enddef
+
+# What the running process was started with; a change means a restart.
+def Sig(): string
+  return string([Model(), Mode(), session_allowed, Opt('extra_args', []), HostPrompts()])
 enddef
 
 def EnsureProcess(): bool
@@ -766,7 +785,7 @@ def EnsureProcess(): bool
     Warn('`' .. exe .. '` not found. Install Claude Code or set g:claude_cmd.')
     return false
   endif
-  var sig = string([Model(), Mode(), session_allowed, Opt('extra_args', [])])
+  var sig = Sig()
   if Running() && sig == proc_sig
     return true
   endif
@@ -809,6 +828,7 @@ def AddStderr(msg: string)
 enddef
 
 def OnExit(code: number)
+  ClosePrompts()
   if busy
     Info('✖ Claude process exited (code ' .. code .. ')')
     for l in stderr_tail[-5 :]
@@ -820,6 +840,7 @@ enddef
 
 def FinishTurn()
   CloseText()
+  ClearInterrupt()
   SetBusy(false)
   if touched_files
     touched_files = false
@@ -888,6 +909,10 @@ def OnEvent(line: string)
     OnToolResults(ev)
   elseif t == 'result'
     OnResult(ev)
+  elseif t == 'control_request'
+    OnControlRequest(ev)
+  elseif t == 'control_cancel_request'
+    CancelPrompt(get(ev, 'request_id', ''))
   endif
 enddef
 
@@ -960,11 +985,21 @@ enddef
 
 def OnResult(ev: dict<any>)
   var secs = printf('%.1fs', reltimefloat(reltime(turn_start)))
+  if interrupting
+    # The turn we interrupted has ended: that is not an error.
+    Info('■ Interrupted')
+    FinishTurn()
+    return
+  endif
   if get(ev, 'is_error', false) || get(ev, 'subtype', 'success') != 'success'
     var r = get(ev, 'result', '')
     Info('✖ ' .. (type(r) == v:t_string && r != '' ? r : get(ev, 'subtype', 'error')))
   endif
   var denials = get(ev, 'permission_denials', [])
+  if HostPrompts()
+    # Denials were already answered one by one, as they came up.
+    denials = []
+  endif
   var footer = '── ' .. secs
   var cost = get(ev, 'total_cost_usd', 0.0)
   if Opt('show_cost', false) && type(cost) == v:t_float
@@ -1014,6 +1049,150 @@ def OnPermissionChoice(choice: number, rules: list<string>)
     return
   endif
   SendRaw('Permission granted. Please retry what was blocked and continue.')
+enddef
+
+# ---- synchronous prompts: the CLI sends a request and waits for our answer
+
+def OnControlRequest(ev: dict<any>)
+  var req = get(ev, 'request', {})
+  var id = get(ev, 'request_id', '')
+  if id == ''
+    return
+  endif
+  if get(req, 'subtype', '') != 'can_use_tool'
+    # Unknown request: answer so the CLI is never left waiting.
+    SendControl({type: 'control_response', response: {subtype: 'error', request_id: id,
+      error: 'unsupported request: ' .. get(req, 'subtype', '')}})
+    return
+  endif
+  add(prompts, {id: id, tool: get(req, 'tool_name', ''), input: get(req, 'input', {}),
+    suggestions: get(req, 'permission_suggestions', [])})
+  if len(prompts) == 1
+    ShowPrompt()
+  endif
+enddef
+
+def Answer(id: string, response: dict<any>)
+  SendControl({type: 'control_response', response: {subtype: 'success', request_id: id, response: response}})
+enddef
+
+def ShowPrompt()
+  if empty(prompts)
+    return
+  endif
+  var pr = prompts[0]
+  var edit = util.IsEditTool(pr.tool)
+  var summary = util.ToolSummary(pr.tool, pr.input)
+  SetBusy(true, 'waiting for you')
+  var keys = [['y', 'allow'], ['a', 'always this session']]
+  if edit
+    add(keys, ['e', 'accept all edits'])
+  endif
+  add(keys, ['n', 'deny'])
+  var more = len(prompts) > 1 ? '  (+' .. (len(prompts) - 1) .. ' more waiting)' : ''
+  var lines = util.PermissionPreview(pr.tool, pr.input)
+  var footer = join(map(copy(keys), (_, k) => '[' .. k[0] .. '] ' .. k[1]), '   ') .. more
+  if !exists('*popup_create') || Opt('no_popups', false)
+    var pick = inputlist(['Claude wants to: ' .. summary] + map(copy(keys), (i, k) => (i + 1) .. '. ' .. k[1]))
+    HandlePromptKey(pick >= 1 && pick <= len(keys) ? keys[pick - 1][0] : 'n')
+    return
+  endif
+  prompt_popup = popup_create(lines + (empty(lines) ? [] : ['']) + [footer], {
+    title: ' ' .. summary .. ' ',
+    padding: [0, 1, 0, 1], border: [], pos: 'center', zindex: 200,
+    minwidth: 40, maxwidth: float2nr(&columns * 0.85), maxheight: &lines - 6,
+    wrap: true, mapping: false, drag: false,
+    filter: (id, key) => {
+      var k = tolower(key)
+      if k == "\<Esc>" || k == "\<C-c>"
+        k = 'n'
+      elseif k == '1'
+        k = 'y'
+      elseif k == '2'
+        k = 'a'
+      elseif k == '3'
+        k = edit ? 'e' : 'n'
+      elseif k == '4'
+        k = edit ? 'n' : ''
+      endif
+      if index(map(copy(keys), (_, kk) => kk[0]), k) >= 0
+        popup_close(id)
+        HandlePromptKey(k)
+      endif
+      return true  # modal: swallow everything else
+    },
+  })
+  win_execute(prompt_popup, ['call matchadd("DiffAdd", "^+ .*")', 'call matchadd("DiffDelete", "^- .*")',
+    'call matchadd("Comment", "^#.*")', 'call matchadd("Title", "^\\[.\\] .*")'])
+enddef
+
+def HandlePromptKey(key: string)
+  if empty(prompts)
+    return
+  endif
+  var pr = remove(prompts, 0)
+  prompt_popup = 0
+  var what = util.ToolSummary(pr.tool, pr.input)
+  if key == 'n'
+    Answer(pr.id, {behavior: 'deny', message: 'The user denied this tool call.'})
+    Info('✗ Denied: ' .. what)
+  else
+    var resp: dict<any> = {behavior: 'allow', updatedInput: pr.input}
+    if key == 'a'
+      resp.updatedPermissions = [{type: 'addRules', rules: [util.AllowRule(pr.tool, pr.input)],
+        behavior: 'allow', destination: 'session'}]
+      Info('✓ Allowed for this session: ' .. what)
+    elseif key == 'e'
+      resp.updatedPermissions = [{type: 'setMode', mode: 'acceptEdits', destination: 'session'}]
+      perm_mode = 'acceptEdits'
+      proc_sig = Sig()  # already applied in the running process: no restart
+      Info('✓ Accepting all edits for this session')
+    endif
+    Answer(pr.id, resp)
+  endif
+  if empty(prompts)
+    SetBusy(true, 'thinking')
+  else
+    ShowPrompt()
+  endif
+enddef
+
+# The CLI withdrew a request (e.g. the tool call was aborted).
+def CancelPrompt(id: string)
+  var i = indexof(prompts, (_, p) => p.id == id)
+  if i < 0
+    return
+  endif
+  remove(prompts, i)
+  if i == 0
+    CloseSingle()
+    if empty(prompts)
+      SetBusy(true, 'thinking')
+    else
+      ShowPrompt()
+    endif
+  endif
+enddef
+
+def CloseSingle()
+  if prompt_popup != 0
+    popup_close(prompt_popup)
+    prompt_popup = 0
+  endif
+enddef
+
+# Drop every waiting request without answering (the process is going away).
+def ClosePrompts()
+  prompts = []
+  CloseSingle()
+enddef
+
+# Answer every waiting request with a denial (we are interrupting).
+def DenyPrompts(why: string)
+  for pr in prompts
+    Answer(pr.id, {behavior: 'deny', message: why, interrupt: true})
+  endfor
+  ClosePrompts()
 enddef
 
 # ---------------------------------------------------------------- sending
@@ -1100,14 +1279,57 @@ def History(dir: number)
   normal! G$
 enddef
 
+# Ask Claude to stop the turn (the process and its prompt cache survive). If
+# it doesn't end the turn in a few seconds, kill the process instead.
 export def Stop()
   if !busy
     return
   endif
-  # StopProcess silences the process callbacks, so report it here.
+  if interrupting
+    return
+  endif
+  if !Running()
+    HardStop()
+    return
+  endif
+  DenyPrompts('Interrupted by the user')
+  interrupting = true
+  SendControl({type: 'control_request', request_id: NewId(), request: {subtype: 'interrupt'}})
+  interrupt_timer = timer_start(3000, (_) => {
+    interrupt_timer = 0
+    if interrupting
+      HardStop()
+    endif
+  })
+  SetBusy(true, 'stopping')
+enddef
+
+# StopProcess silences the process callbacks, so report it here.
+def HardStop()
   StopProcess()
   Info('■ Interrupted')
   FinishTurn()
+enddef
+
+def ClearInterrupt()
+  interrupting = false
+  if interrupt_timer != 0
+    timer_stop(interrupt_timer)
+    interrupt_timer = 0
+  endif
+enddef
+
+var id_n = 0
+def NewId(): string
+  id_n += 1
+  return 'vim-' .. getpid() .. '-' .. id_n
+enddef
+
+def SendControl(msg: dict<any>)
+  if Running()
+    ch_sendraw(job, json_encode(msg) .. "\n")
+    DebugLog('in', json_encode(msg))
+  endif
 enddef
 
 # ---------------------------------------------------------------- commands
