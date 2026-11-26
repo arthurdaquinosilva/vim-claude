@@ -10,6 +10,7 @@ const HDR_CLAUDE = '✻ Claude:'
 const HDR_PAT = '^\%(❯ You\|✻ Claude\):$'
 const INDENT = '  '         # message bodies are indented under their label
 const LIVE_LABELS = {thinking: 'thinking…', responding: 'writing…'}
+const POSITIONS = ['right', 'left', 'top', 'bottom']
 const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const MODE_LABELS = {default: 'ask before edits', acceptEdits: 'auto-accept edits',
   plan: 'plan mode', bypassPermissions: 'bypass permissions'}
@@ -67,6 +68,8 @@ var chat_cwd = ''                       # where the conversation runs; fixed unt
 var fork_next = false                   # start the next process with --fork-session
 var shell_pending: list<dict<any>> = []  # "!cmd" results Claude has not been told about yet
 var shell_job: job = null_job
+var mark_state = ''                     # marks last drawn as signs, to skip redundant redraws
+var mark_signs_defined: dict<bool> = {}
 var ext_keys = false                    # we asked the terminal for modified keys
 var turns: list<dict<any>> = []         # sent messages: {text, time, uuid} for rewinding
 var rewind_cbs: dict<func(dict<any>)> = {}
@@ -151,10 +154,14 @@ def SetupChatBuf()
   nnoremap <buffer><silent> gy <ScriptCmd>YankCodeBlock()<CR>
   # Select part of a reply and press Enter to ask about it.
   xnoremap <buffer><silent> <CR> <Esc><ScriptCmd>QuoteSelection()<CR>
+  # Marks show up in the sign column, so you can see where you can jump to.
+  nnoremap <buffer><silent> m <ScriptCmd>SetMark()<CR>
 
   augroup claude_chat
     autocmd! * <buffer>
     autocmd BufWinLeave <buffer> timer_start(0, (_) => CloseOrphanInput())
+    # :delmarks, :mark and friends do not announce themselves.
+    autocmd CursorMoved,CursorHold,BufWinEnter,WinEnter <buffer> RefreshMarks()
     # Syntax was (re)loaded: fence regions are gone, rebuild them.
     autocmd Syntax <buffer> ResetFenceSyntax()
   augroup END
@@ -165,7 +172,8 @@ def SetupChatWin()
   # Wrapped list items line up with their text, not with the bullet.
   setlocal breakindentopt=list:-1
   &l:formatlistpat = '^\s*\%(\d\+[.)]\|[-*+]\)\s\+'
-  setlocal signcolumn=no foldcolumn=0 colorcolumn= winfixwidth conceallevel=2
+  setlocal foldcolumn=0 colorcolumn= winfixwidth conceallevel=2
+  &l:signcolumn = MarkSignMode()
   setlocal foldmethod=expr foldlevel=99
   &l:foldexpr = "getline(v:lnum) =~# '" .. HDR_PAT .. "' ? '>1' : '1'"
   &l:statusline = '%!claude#StatusLine()'
@@ -313,6 +321,7 @@ def DefineHighlights()
   highlight default ClaudeAssistant ctermfg=173 guifg=#d97757 cterm=bold gui=bold
   highlight default ClaudeLive ctermfg=173 guifg=#d97757
   highlight default link ClaudeTime Comment
+  highlight default link ClaudeMarkSign Directory
   highlight default link ClaudeDiffAdd DiffAdd
   highlight default link ClaudeDiffDel DiffDelete
   highlight default link ClaudeToolDim Comment
@@ -523,7 +532,8 @@ def PanelWidth(): number
 enddef
 
 def OnVimResized()
-  if Opt('position', 'right') == 'bottom'
+  # Only a side panel keeps a width; one above or below spans the screen.
+  if index(['top', 'bottom'], CurrentPosition()) >= 0
     return
   endif
   for w in ChatWins() + InputWins()
@@ -539,12 +549,56 @@ augroup claude_resize
   autocmd VimResized * OnVimResized()
 augroup END
 
-def CreatePanel()
-  var pos = Opt('position', 'right')
+# Where this tab's panel is (or, if there is none, would go by default).
+def CurrentPosition(): string
+  return get(t:, 'claude_position', Position('', ''))
+enddef
+
+# The placement asked for: an explicit name wins, then the command modifiers
+# (:vertical, :horizontal, :topleft, :botright ...), then g:claude_position.
+# 'vertical' and 'horizontal' also work as names. '' for an unknown name.
+export def Position(arg: string, mods: string): string
+  if arg != ''
+    var a = get({vertical: 'right', vsplit: 'right', horizontal: 'bottom', split: 'bottom'}, arg, arg)
+    if index(POSITIONS, a) < 0
+      Warn('unknown position ' .. arg .. ' (' .. join(POSITIONS + ['vertical', 'horizontal'], ', ') .. ')')
+      return ''
+    endif
+    return a
+  endif
+  var base = Opt('position', 'right')
+  if index(POSITIONS, base) < 0
+    base = 'right'
+  endif
+  var vertical = base == 'left' || base == 'right'
+  var at_start = base == 'left' || base == 'top'
+  if mods =~ '\<vertical\>'
+    vertical = true
+  elseif mods =~ '\<horizontal\>'
+    vertical = false
+  endif
+  if mods =~ '\<\%(topleft\|aboveleft\|leftabove\)\>'
+    at_start = true
+  elseif mods =~ '\<\%(botright\|belowright\|rightbelow\)\>'
+    at_start = false
+  endif
+  return vertical ? (at_start ? 'left' : 'right') : (at_start ? 'top' : 'bottom')
+enddef
+
+export def CompletePositions(..._): string
+  return join(POSITIONS + ['vertical', 'horizontal'], "\n")
+enddef
+
+def CreatePanel(where: string = '')
+  var pos = where != '' ? where : Position('', '')
+  t:claude_position = pos
   var width = PanelWidth()
   if pos == 'left'
     topleft vsplit
     execute 'vertical resize ' .. width
+  elseif pos == 'top'
+    topleft split
+    execute 'resize ' .. Opt('height', 18)
   elseif pos == 'bottom'
     botright split
     execute 'resize ' .. Opt('height', 18)
@@ -573,10 +627,21 @@ def CreatePanel()
   win_execute(chat_win, 'normal! G')
 enddef
 
-export def Open(focus: bool = true)
+# Open the panel, optionally somewhere other than g:claude_position: `pos` is a
+# name (left, right, top, bottom, vertical, horizontal) and `mods` the command
+# modifiers it was called with. Open somewhere else already: it moves there.
+export def Open(focus: bool = true, pos: string = '', mods: string = '')
+  var asked = pos != '' || mods != '' ? Position(pos, mods) : ''
+  if pos != '' && asked == ''
+    return
+  endif
+  if IsOpen() && asked != '' && asked != CurrentPosition()
+    Move(asked)
+    return
+  endif
   if !IsOpen()
     var from = win_getid()
-    CreatePanel()
+    CreatePanel(asked)
     if !focus
       win_gotoid(from)
     endif
@@ -586,11 +651,37 @@ export def Open(focus: bool = true)
   endif
 enddef
 
-export def Toggle()
+export def Toggle(pos: string = '', mods: string = '')
   if IsOpen()
     Close()
   else
-    Open()
+    Open(true, pos, mods)
+  endif
+enddef
+
+# Put the panel somewhere else. The windows are rebuilt around the same
+# buffers, so the conversation, the input and the history stay as they are.
+export def Move(pos: string = '')
+  if pos == ''
+    var choices = POSITIONS
+    popup_menu(choices, {title: ' Move panel to ', padding: [0, 1, 0, 1], border: [],
+      callback: (_, i) => {
+        if i > 0
+          Move(choices[i - 1])
+        endif
+      }})
+    return
+  endif
+  var where = Position(pos, '')
+  if where == ''
+    return
+  endif
+  if IsOpen()
+    Close()
+    CreatePanel(where)
+    FocusInput(true)
+  else
+    Open(true, where)
   endif
 enddef
 
@@ -648,6 +739,7 @@ def Modify(F: func)
   for w in follow
     win_execute(w, 'normal! G')
   endfor
+  RefreshMarks()   # (deleting lines deletes the marks on them)
 enddef
 
 def LastLine(): string
@@ -768,7 +860,8 @@ def FormatTablesFrom(start: number)
   endif
   var wins = ChatWins()
   var width = empty(wins) ? Opt('width', 80) : winwidth(wins[0])
-  var reps = util.FormatTables(getbufline(chat_buf, start, '$'), width - 1)
+  # (the sign column takes room from the text)
+  var reps = util.FormatTables(getbufline(chat_buf, start, '$'), width - 1 - (MarkSignMode() == 'yes' ? 2 : 0))
   if empty(reps)
     return
   endif
@@ -2406,6 +2499,65 @@ def MentionComplete()
   var base = strpart(m[0], 1)
   var files = ProjectFiles()
   complete(m[1] + 2, base == '' ? files[: 199] : matchfuzzy(files, base)[: 199])
+enddef
+
+# ---------------------------------------------------------------- marks
+
+# g:claude_mark_signs: true (always a sign column), 'auto' (only while there
+# are marks, which shifts the text) or false.
+def MarkSignMode(): string
+  var m = Opt('mark_signs', true)
+  return type(m) == v:t_string && m == 'auto' ? 'auto' : (m ? 'yes' : 'no')
+enddef
+
+# m{a-zA-Z} sets a mark like always, then shows it. (Marks are plain Vim
+# marks: 'a jumps to one, ]' and [' go to the next and previous, :delmarks
+# removes them.) Anything else after m is passed on untouched.
+def SetMark()
+  var c = getcharstr()
+  if c =~ '^[a-zA-Z]$'
+    execute 'normal! m' .. c
+    RefreshMarks()
+  elseif c =~ "^[`'\\[\\]<>]$"
+    execute 'normal! m' .. c
+  endif
+enddef
+
+# A sign for every line carrying a mark of the chat: a-z, and A-Z that point
+# here. Several marks on one line share a sign (two letters, or one and a +).
+def RefreshMarks()
+  if !bufexists(chat_buf) || MarkSignMode() == 'no'
+    return
+  endif
+  var at: dict<list<string>> = {}
+  var all = getmarklist(chat_buf)
+  for m in getmarklist()
+    if get(m.pos, 0, 0) == chat_buf
+      add(all, m)
+    endif
+  endfor
+  for m in all
+    var name = strcharpart(m.mark, 1)
+    if name =~ '^[a-zA-Z]$' && m.pos[1] >= 1 && m.pos[1] <= LineCount()
+      var key = string(m.pos[1])
+      at[key] = add(get(at, key, []), name)
+    endif
+  endfor
+  var state = string(map(sort(keys(at), 'N'), (_, k) => [k, join(sort(copy(at[k])), '')]))
+  if state == mark_state
+    return
+  endif
+  mark_state = state
+  sign_unplace('claude_marks', {buffer: chat_buf})
+  for [lnum, letters] in items(at)
+    var joined = join(sort(copy(letters)), '')
+    var name = 'ClaudeMark_' .. joined
+    if !has_key(mark_signs_defined, name)
+      mark_signs_defined[name] = true
+      sign_define(name, {text: len(joined) <= 2 ? joined : strcharpart(joined, 0, 1) .. '+', texthl: 'ClaudeMarkSign'})
+    endif
+    sign_place(0, 'claude_marks', name, chat_buf, {lnum: str2nr(lnum), priority: 20})
+  endfor
 enddef
 
 # ---------------------------------------------------------------- !shell, images

@@ -42,6 +42,13 @@ run commands when you allow it, and keep context across messages.
   sessions in this directory), `:ClaudeContinue` (the latest one), `:ClaudeFork`
   (branch into a new session), `:ClaudeStop`, `:ClaudeModel`, `:ClaudeMode`. A
   conversation stays in the directory it started in, whatever you `:cd` to.
+- **Where it opens.** On the side or as a band above or below:
+  `:ClaudeOpen bottom`, `:ClaudeToggle left`, `:vertical ClaudeOpen`,
+  `:topleft horizontal ClaudeOpen`. `:ClaudeMove top` moves an open panel
+  without touching the conversation.
+- **Marks.** Set marks in the transcript with `ma`, `mB`... and see them in
+  the sign column; `'a` jumps to one, `]'` and `['` go to the next and previous,
+  so you can bookmark parts of replies and move between them.
 - **Rewind.** `:ClaudeRewind` (`<Leader>cu`, or `/rewind`) restores your files
   to how they were before any message of the session, after showing which
   files would change. The conversation is kept.
@@ -157,7 +164,8 @@ you can ask about it, and `q` closes the panel.
 ```vim
 let g:claude_model = 'sonnet'               " default: the CLI default
 let g:claude_permission_mode = 'default'    " or acceptEdits / plan
-let g:claude_position = 'right'             " or left / bottom
+let g:claude_position = 'right'             " or left / top / bottom
+let g:claude_mark_signs = v:true            " show marks in the transcript's sign column
 let g:claude_map_prefix = '<Leader>c'       " prefix for the mappings above
 let g:markdown_fenced_languages = ['python', 'javascript', 'vim', 'sh']
 ```

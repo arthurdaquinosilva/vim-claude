@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Choose where the panel opens per use: `:ClaudeOpen {pos}`, `:ClaudeToggle {pos}`
+  (left, right, top, bottom, vertical, horizontal), the `:vertical`,
+  `:horizontal`, `:topleft` and `:botright` modifiers, and `:ClaudeMove` to move
+  an open panel. New `top` placement; each tab keeps its own.
+- Marks set in the transcript (`ma`, `mB`, ...) are shown in its sign column,
+  so you can see them and jump between them (`'a`, `]'`, `['`).
+  `g:claude_mark_signs` controls it.
 - Shift-Enter inserts a newline under tmux and similar terminals: the plugin now
   asks the terminal to report modified keys while the input box is focused
   (`g:claude_extended_keys`), instead of Shift-Enter arriving as a plain Enter

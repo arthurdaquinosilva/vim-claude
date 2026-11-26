@@ -29,8 +29,9 @@ import autoload 'claude.vim'
 import autoload 'claude/edit.vim'
 
 command! -nargs=* -range Claude claude.Command(<q-args>, <range>, <line1>, <line2>)
-command! -nargs=0 ClaudeToggle claude.Toggle()
-command! -nargs=0 ClaudeOpen claude.Open()
+command! -nargs=? -complete=custom,claude#CompletePositions ClaudeToggle claude.Toggle(<q-args>, <q-mods>)
+command! -nargs=? -complete=custom,claude#CompletePositions ClaudeMove claude.Move(<q-args>)
+command! -nargs=? -complete=custom,claude#CompletePositions ClaudeOpen claude.Open(true, <q-args>, <q-mods>)
 command! -nargs=0 ClaudeClose claude.Close()
 command! -nargs=0 -range=% ClaudeExplain claude.Explain(<line1>, <line2>)
 command! -nargs=0 -range=% ClaudeAdd claude.AddToInput(<line1>, <line2>)

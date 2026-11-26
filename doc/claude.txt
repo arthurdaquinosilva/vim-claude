@@ -27,7 +27,24 @@ CONTENTS                                                      *claude-contents*
 2. CHAT PANEL                                                     *claude-chat*
 
 |:ClaudeToggle| (<Leader>cc) opens a panel on the right: the transcript on
-top and a small input box below.
+top and a small input box below. See |claude-position| to put it elsewhere.
+
+                                                              *claude-position*
+Where the panel goes: |g:claude_position| sets the default (right, left, top
+or bottom), and the commands take a position for one use:
+
+  :ClaudeOpen bottom      a band across the bottom of the screen
+  :ClaudeToggle left      a column on the left
+  :vertical ClaudeOpen    a column; the side comes from |g:claude_position|
+  :horizontal ClaudeOpen  a band; above or below likewise
+  :topleft ClaudeOpen     the other end: left or top, whichever applies
+  :ClaudeMove top         move the open panel (no argument: pick from a menu)
+
+Names are left, right, top, bottom, and vertical (right) / horizontal (bottom).
+An explicit name beats modifiers, which beat the option. Opening the panel
+somewhere else while it is open moves it. Each tab remembers its own placement,
+and moving only rebuilds the windows: the conversation, your draft and the
+marks stay.
 
 The transcript is an ordinary read-only buffer, so all of Vim works in it:
 scroll, search with |/|, yank, |gf| on file names, fold a message with |zc|.
@@ -88,6 +105,15 @@ Each tool call is followed by its result: edits as a numbered diff with a
 line of context, commands with the first lines of output (the rest is
 counted), reads and searches with a count, todo lists as a checklist. Tune
 with |g:claude_tool_details| and |g:claude_tool_lines|.
+
+Marks: in the transcript `m{a-zA-Z}` sets a mark as usual and the sign column
+shows its letter on that line (two marks on a line share a sign; with three
+or more it shows the first and a +; uppercase marks show when they point into
+the transcript). Jump with `'a`, go to the next and previous marked line with
+`]'` and `['`, and remove marks with |:delmarks|. This is a way to bookmark
+parts of long replies and move between them. |g:claude_mark_signs| controls
+it: true (a sign column, the default), 'auto' (the column appears with the
+first mark and shifts the text) or false.
 
 The statusline shows a spinner and what Claude is doing (thinking, using a
 tool), the model, how full the context window is (ctx 12%), and the
@@ -213,8 +239,10 @@ conversation is resumed on the next message).
 :Claude [text]               *:Claude*
     Open the panel, or send [text]. With a range: send the selection with
     [text] as the question, or add it to the input box if [text] is empty.
-:ClaudeToggle                *:ClaudeToggle*   Show / hide the panel.
-:ClaudeOpen  :ClaudeClose    *:ClaudeOpen* *:ClaudeClose*
+:ClaudeToggle [pos]          *:ClaudeToggle*   Show / hide the panel.
+:ClaudeOpen [pos]            *:ClaudeOpen*     Show it (moves it if elsewhere).
+:ClaudeClose                 *:ClaudeClose*
+:ClaudeMove [pos]            *:ClaudeMove*     Move the open panel.
 :[range]ClaudeExplain        *:ClaudeExplain*  Explain range (default: file).
 :[range]ClaudeAdd            *:ClaudeAdd*      Mention range in the input box.
 :[range]ClaudeEdit [instr]   *:ClaudeEdit*     Inline edit with diff review.
@@ -264,11 +292,14 @@ Change the <Leader>c prefix with |g:claude_map_prefix|, e.g. >
 *g:claude_permission_prompt* 'host': the CLI asks Vim and    Default: 'host'
                             waits for the answer; 'retry':
                             ask after the reply, then retry.
-*g:claude_position*         'right', 'left' or 'bottom'.    Default: 'right'
+*g:claude_position*         'right', 'left', 'top' or       Default: 'right'
+                            'bottom'.
 *g:claude_width*            Panel width: columns, or a      Default: 0.5
                             fraction of the screen (0.5 =
                             half; kept on resize).
-*g:claude_height*           Panel height for 'bottom'.      Default: 18
+*g:claude_height*           Panel height for 'top' and      Default: 18
+                            'bottom'.
+*g:claude_mark_signs*       Show marks in the sign column.  Default: v:true
 *g:claude_input_height*     Minimum input box height; it    Default: 1
                             grows with what you type.
 *g:claude_input_border*     Draw a rule under the input     Default: v:true
