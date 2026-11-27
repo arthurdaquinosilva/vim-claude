@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `:ClaudeBack` (`;b` in the panel, `<Leader>cb` anywhere) jumps to your code window; set
+  `g:claude_back_key` to change or disable the panel mapping.
 - Choose where the panel opens per use: `:ClaudeOpen {pos}`, `:ClaudeToggle {pos}`
   (left, right, top, bottom, vertical, horizontal), the `:vertical`,
   `:horizontal`, `:topleft` and `:botright` modifiers, and `:ClaudeMove` to move

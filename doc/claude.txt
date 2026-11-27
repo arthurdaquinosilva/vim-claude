@@ -242,6 +242,10 @@ conversation is resumed on the next message).
 :ClaudeToggle [pos]          *:ClaudeToggle*   Show / hide the panel.
 :ClaudeOpen [pos]            *:ClaudeOpen*     Show it (moves it if elsewhere).
 :ClaudeClose                 *:ClaudeClose*
+:ClaudeBack                   *:ClaudeBack*     Jump from the panel to your code
+                                                window (<Leader>cb).  Set
+                                                *g:claude_back_key* (e.g. ';b') to
+                                                map it in the panel's normal mode (default ';b', '' to disable).
 :ClaudeMove [pos]            *:ClaudeMove*     Move the open panel.
 :[range]ClaudeExplain        *:ClaudeExplain*  Explain range (default: file).
 :[range]ClaudeAdd            *:ClaudeAdd*      Mention range in the input box.

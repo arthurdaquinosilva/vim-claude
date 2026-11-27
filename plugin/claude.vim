@@ -32,6 +32,7 @@ command! -nargs=* -range Claude claude.Command(<q-args>, <range>, <line1>, <line
 command! -nargs=? -complete=custom,claude#CompletePositions ClaudeToggle claude.Toggle(<q-args>, <q-mods>)
 command! -nargs=? -complete=custom,claude#CompletePositions ClaudeMove claude.Move(<q-args>)
 command! -nargs=? -complete=custom,claude#CompletePositions ClaudeOpen claude.Open(true, <q-args>, <q-mods>)
+command! -nargs=0 ClaudeBack claude.Back()
 command! -nargs=0 ClaudeClose claude.Close()
 command! -nargs=0 -range=% ClaudeExplain claude.Explain(<line1>, <line2>)
 command! -nargs=0 -range=% ClaudeAdd claude.AddToInput(<line1>, <line2>)
@@ -65,7 +66,7 @@ augroup END
 if !get(g:, 'claude_no_mappings', false)
   var p = get(g:, 'claude_map_prefix', '<Leader>c')
   for [key, cmd] in [['c', 'ClaudeToggle'], ['n', 'ClaudeNew'], ['r', 'ClaudeResume'],
-      ['m', 'ClaudeModel'], ['p', 'ClaudeMode'], ['u', 'ClaudeRewind'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd']]
+      ['m', 'ClaudeModel'], ['p', 'ClaudeMode'], ['u', 'ClaudeRewind'], ['b', 'ClaudeBack'], ['e', 'ClaudeExplain'], ['a', 'ClaudeAdd']]
     execute 'nnoremap <silent> ' .. p .. key .. ' <Cmd>' .. cmd .. '<CR>'
   endfor
   execute 'nnoremap <silent> ' .. p .. 'i :ClaudeEdit<CR>'

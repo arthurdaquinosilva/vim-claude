@@ -146,6 +146,7 @@ def SetupChatBuf()
 
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
+  BackMap()
   for key in ['i', 'a', 'I', 'A', 'o', 'O', '<CR>']
     execute 'nnoremap <buffer><silent> ' .. key .. ' <ScriptCmd>FocusInput(true)<CR>'
   endfor
@@ -253,6 +254,7 @@ def SetupInputBuf()
   nnoremap <buffer><silent><nowait> o <ScriptCmd>MakeRoomForNewline()<CR>o
   nnoremap <buffer><silent><nowait> O <ScriptCmd>MakeRoomForNewline()<CR>O
   nnoremap <buffer><silent> <CR> <ScriptCmd>SubmitInput()<CR>
+  BackMap()
   inoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   nnoremap <buffer><silent> <C-c> <ScriptCmd>Stop()<CR>
   nnoremap <buffer><silent> q <ScriptCmd>Close()<CR>
@@ -700,6 +702,30 @@ def CloseOrphanInput()
         execute 'silent! :' .. win_id2win(w) .. 'close'
       endif
     endfor
+  endif
+enddef
+
+# Jump from the panel back to a code window: the previous window if it is
+# one, else the first window in the tab that is not part of the panel.
+export def Back()
+  var panel = ChatWins() + InputWins()
+  var prev = win_getid(winnr('#'))
+  if prev != 0 && index(panel, prev) < 0
+    win_gotoid(prev)
+    return
+  endif
+  for w in gettabinfo(tabpagenr())[0].windows
+    if index(panel, w) < 0 && win_gettype(w) == ''
+      win_gotoid(w)
+      return
+    endif
+  endfor
+enddef
+
+def BackMap()
+  var key = Opt('back_key', ';b')
+  if key != ''
+    execute 'nnoremap <buffer><silent> ' .. key .. ' <ScriptCmd>Back()<CR>'
   endif
 enddef
 

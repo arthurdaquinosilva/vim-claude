@@ -158,3 +158,25 @@ def g:Test_default_position_comes_from_the_option()
   g:WaitFor('!claude#Busy()')
   Fresh()
 enddef
+
+def g:Test_back_to_code()
+  silent! only!
+  edit code.txt
+  var code = win_getid()
+  claude.Open(true, 'bottom', '')
+  assert_notequal(code, win_getid())
+  ClaudeBack
+  assert_equal(code, win_getid())
+  claude.Open(true, '', '')
+  wincmd k
+  ClaudeBack
+  assert_equal(code, win_getid())
+  Fresh()
+  silent! only!
+enddef
+
+def g:Test_back_key_is_mapped_in_the_panel_by_default()
+  claude.Open(true, 'bottom', '')
+  assert_match('Back', maparg(';b', 'n'))
+  Fresh()
+enddef
